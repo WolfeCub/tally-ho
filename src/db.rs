@@ -1,4 +1,4 @@
-//! Database connection.
+//! Database connection and schema management.
 //!
 //! `toasty::Db` is cheap to clone (an `Arc` over a shared pool), but every
 //! query takes `&mut db`. So the app holds one `Db` and each request clones it:
@@ -8,17 +8,19 @@ use std::path::Path;
 
 const DEFAULT_URL: &str = "sqlite:./data/tally-ho.db";
 
-/// Connects and, in dev, creates the schema directly from the models if it is
-/// not already there.
-///
-/// `push_schema` is the fast path while the schema is still moving; the
-/// `migrate` binary takes over once there is data worth preserving.
-pub async fn connect() -> toasty::Result<toasty::Db> {
-    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_URL.to_string());
-    connect_url(&url).await
+fn url_from_env() -> String {
+    std::env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_URL.to_string())
 }
 
-pub async fn connect_url(url: &str) -> toasty::Result<toasty::Db> {
+/// Connects without touching the schema.
+///
+/// For the migrate binary, which is the thing that manages the schema and so
+/// must not have migrations applied underneath it on the way in.
+pub async fn connect_raw() -> toasty::Result<toasty::Db> {
+    connect_raw_url(&url_from_env()).await
+}
+
+pub async fn connect_raw_url(url: &str) -> toasty::Result<toasty::Db> {
     // A file-backed SQLite URL fails to open if the directory is missing, and
     // `DATA_DIR` won't exist on a first run.
     if let Some(path) = url.strip_prefix("sqlite:")
@@ -33,7 +35,7 @@ pub async fn connect_url(url: &str) -> toasty::Result<toasty::Db> {
     // larger than one would hand out connections that can't see the schema.
     let max_pool_size = if url.contains(":memory:") { 1 } else { 16 };
 
-    let mut db = toasty::Db::builder()
+    toasty::Db::builder()
         // `crate::*` is the only supported whole-crate form; the macro has no
         // arm for a module glob like `crate::models::*`. It discovers by
         // CARGO_PKG_NAME rather than module path, so models in `crate::models`
@@ -41,27 +43,75 @@ pub async fn connect_url(url: &str) -> toasty::Result<toasty::Db> {
         .models(toasty::models!(crate::*))
         .max_pool_size(max_pool_size)
         .connect(url)
-        .await?;
-
-    // `push_schema` issues bare CREATE TABLEs and fails with `table already
-    // exists` on the second run, so it cannot be called unconditionally — that
-    // would make the app start exactly once per database. Probe with the
-    // cheapest possible query and only create the schema when it is genuinely
-    // absent. Replaced wholesale by the migration workflow.
-    let schema_present = crate::models::Receipt::all()
-        .first()
-        .exec(&mut db)
         .await
-        .is_ok();
+}
 
-    if schema_present {
-        tracing::debug!("schema already present; skipping push_schema");
-    } else {
-        tracing::info!("no schema found; creating it from the models");
+/// Connects and brings the schema up to date.
+pub async fn connect() -> anyhow::Result<toasty::Db> {
+    connect_url(&url_from_env()).await
+}
+
+pub async fn connect_url(url: &str) -> anyhow::Result<toasty::Db> {
+    let db = connect_raw_url(url).await?;
+
+    if url.contains(":memory:") {
+        // Migrations cannot reach an in-memory database: applying them opens a
+        // fresh driver connection, and for `:memory:` that is a *different*
+        // empty database than the pool's. So tests build the schema straight
+        // from the models — which is also what makes the drift test below worth
+        // having, since it is what ties the two paths together.
         db.push_schema().await?;
+        return Ok(db);
     }
 
+    apply_migrations(&db).await?;
     Ok(db)
+}
+
+/// Runs any migrations in `toasty/history.toml` that this database hasn't seen.
+///
+/// Done at startup rather than as a separate deploy step: this is a single-user
+/// app started with `cargo leptos watch`, and the alternative failure mode —
+/// forgetting to migrate and then hitting missing-column errors at runtime — is
+/// far more confusing than the migration output in the log.
+///
+/// The driver records applied ids in `__toasty_migrations` and wraps each
+/// migration in a transaction, so this is idempotent and a failure leaves the
+/// schema where it was.
+async fn apply_migrations(db: &toasty::Db) -> anyhow::Result<()> {
+    toasty_cli::ToastyCli::new(db.clone())
+        .parse_from(["toasty", "migration", "apply"])
+        .await
+        .map_err(|e| {
+            // The one predictable way this fails: a database created by an
+            // older build that used `push_schema`, which left no migration
+            // history, so migration 0001 tries to create tables that exist.
+            if format!("{e:#}").contains("already exists") {
+                e.context(
+                    "this database has tables but no migration history, so it predates \
+                     migrations — delete it and let them rebuild it: rm -rf ./data",
+                )
+            } else {
+                e
+            }
+        })?;
+
+    // `apply` reports "no migrations found" and succeeds when the history file
+    // is missing, which would otherwise leave an empty database to fail on its
+    // first query.
+    crate::models::Receipt::all()
+        .first()
+        .exec(&mut db.clone())
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "the schema is missing after applying migrations ({e}) — if toasty/ is \
+                 empty, generate the first migration: \
+                 cargo run --features ssr --bin migrate -- migration generate --name init"
+            )
+        })?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -76,6 +126,42 @@ mod tests {
 
     fn dec(s: &str) -> Decimal {
         Decimal::from_str(s).unwrap()
+    }
+
+    /// Catches the mistake the migration workflow makes easy: editing a model
+    /// and forgetting to generate the migration that goes with it. Tests build
+    /// their schema from the models and the real database builds it from
+    /// migrations, so without this the two could silently diverge.
+    #[tokio::test]
+    async fn the_models_match_the_latest_migration() {
+        let db = super::connect_raw_url("sqlite::memory:").await.unwrap();
+        let config = toasty_cli::Config::default();
+
+        let history =
+            toasty::migration::History::load_or_default(config.migration.get_history_file_path())
+                .unwrap();
+        let latest = history
+            .entries()
+            .last()
+            .expect("no migrations yet — run: migration generate --name init");
+        let snapshot = toasty::migration::Snapshot::load(
+            config.migration.get_snapshots_dir().join(&latest.snapshot_name),
+        )
+        .unwrap();
+
+        let drift = toasty::migration::generate(
+            db.driver(),
+            &snapshot.schema,
+            &db.schema().db,
+            &Default::default(),
+        );
+
+        assert!(
+            drift.is_none(),
+            "src/models.rs has drifted from {}. Run: \
+             cargo run --features ssr --bin migrate -- migration generate --name <what-changed>",
+            latest.name
+        );
     }
 
     #[tokio::test]

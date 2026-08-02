@@ -30,7 +30,13 @@ toasty = { version = "0.9", features = [
     "jiff",
     "rust_decimal",
     "serde",
+    # Schema snapshots and diffing, used by the migrate bin and the test that
+    # checks the models haven't drifted from the last generated migration.
+    "migration",
 ], optional = true }
+# A library, not a binary: it provides `ToastyCli`, which src/bin/migrate.rs
+# wraps and which the app calls at startup to apply pending migrations.
+toasty-cli = { version = "0.9", optional = true }
 serde_json = { version = "1", optional = true }
 
 # Extraction. `schemars` must stay on 1.x to match rig's own (workspace pin
@@ -45,6 +51,8 @@ kamadak-exif = { version = "0.6", optional = true }
 base64 = { version = "0.22", optional = true }
 async-trait = { version = "0.1", optional = true }
 thiserror = { version = "2", optional = true }
+# toasty-cli's own error type, so `?` works in the migrate bin and in db.rs.
+anyhow = { version = "1", optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = [
     "env-filter",
@@ -74,6 +82,7 @@ ssr = [
     "dep:tokio",
     "dep:leptos_axum",
     "dep:toasty",
+    "dep:toasty-cli",
     "dep:serde_json",
     "dep:rig-core",
     "dep:rig-agent",
@@ -83,6 +92,7 @@ ssr = [
     "dep:base64",
     "dep:async-trait",
     "dep:thiserror",
+    "dep:anyhow",
     "dep:tracing",
     "dep:tracing-subscriber",
     "leptos/ssr",
