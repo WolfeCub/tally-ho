@@ -1,2 +1,7 @@
 /target
 .direnv
+
+# Uploaded receipt images and the SQLite database (DATA_DIR).
+/data
+
+.env

@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+/* Tailwind v4 auto-detects sources, but declaring it explicitly removes any
+   doubt that .rs files get scanned for class names. Path is relative to this
+   file. */
+@source "../src/**/*.rs";
+
+@theme {
+  --color-ink: #16181a;
+  --color-surface: #1f2224;
+  --color-edge: #32373a;
+  --color-muted: #9aa0a6;
+  --color-paper: #e8e6e3;
+}
+
+@layer base {
+  html,
+  body {
+    background-color: var(--color-ink);
+    color: var(--color-paper);
+    /* A mistyped width shouldn't hand a phone a horizontal scrollbar. */
+    overflow-x: hidden;
+  }
+
+  /* Below 16px, iOS Safari zooms the viewport when an input takes focus. */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Safe-area insets. Without these, content sits under the iOS notch and home
+   indicator once the app is installed to the home screen. Tailwind ships no
+   env() utilities, so these stay hand-written. */
+@layer utilities {
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .px-safe {
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
+  }
+}
