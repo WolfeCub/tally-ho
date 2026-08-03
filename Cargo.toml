@@ -7,100 +7,78 @@ edition = "2024"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# `multipart` forwards to server_fn/multipart, which is what makes
-# `#[server(input = MultipartFormData)]` available for the photo upload.
+# `multipart` enables `#[server(input = MultipartFormData)]` for the photo upload.
 leptos = { version = "0.8", features = ["multipart"] }
-leptos_router = { version = "0.8" }
-leptos_meta = { version = "0.8" }
+leptos_router = "0.8"
+leptos_meta = "0.8"
 
-# Shared between server and wasm: these appear in the DTOs that server
-# functions pass to the UI, so they must compile for wasm32 too.
+# Shared: these appear in DTOs that cross the wire, so they compile for wasm32.
 serde = { version = "1", features = ["derive"] }
 jiff = { version = "0.2", features = ["serde"] }
 rust_decimal = { version = "1.41", features = ["serde"] }
-# No `v4`/`v7`: the client only parses and serializes ids, it never generates
-# them (toasty's `#[auto]` does that server-side). Enabling a version feature
-# would demand a wasm randomness source we have no use for.
+# No `v4`/`v7`: the client only parses ids, and a version feature would demand a
+# wasm randomness source.
 uuid = { version = "1", features = ["serde"] }
 
-# Server-only. toasty pulls in the SQLite driver, which has no business in the
-# wasm bundle — hence `optional` + ssr-gated `crate::models`.
-toasty = { version = "0.9", features = [
-    "sqlite",
-    "jiff",
-    "rust_decimal",
-    "serde",
-    # Schema snapshots and diffing, used by the migrate bin and the test that
-    # checks the models haven't drifted from the last generated migration.
-    "migration",
-], optional = true }
-# A library, not a binary: it provides `ToastyCli`, which src/bin/migrate.rs
-# wraps and which the app calls at startup to apply pending migrations.
+# Server-only, hence `optional` + the `ssr` feature below. Most of these will not
+# build for wasm32 at all.
+toasty = { version = "0.9", features = ["sqlite", "jiff", "rust_decimal", "serde", "migration"], optional = true }
 toasty-cli = { version = "0.9", optional = true }
+axum = { version = "0.8", optional = true }
+leptos_axum = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs"], optional = true }
 serde_json = { version = "1", optional = true }
+async-trait = { version = "0.1", optional = true }
+anyhow = { version = "1", optional = true }
+thiserror = { version = "2", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
-# Extraction. `schemars` must stay on 1.x to match rig's own (workspace pin
-# 1.0.4) — a major-version mismatch means our `JsonSchema` impls are a
-# different trait than `output_schema::<T>()` wants.
 rig-core = { version = "0.41", optional = true }
 rig-agent = { version = "0.41", optional = true }
+# Must stay on the same major as rig's own schemars, or our `JsonSchema` impls
+# are a different trait than `output_schema::<T>()` wants.
 schemars = { version = "1.0", optional = true }
-# Default features include webp decoding, which the test receipt needs.
+# Default features include webp, which phone photos arrive as.
 image = { version = "0.25", optional = true }
 kamadak-exif = { version = "0.6", optional = true }
 base64 = { version = "0.22", optional = true }
-async-trait = { version = "0.1", optional = true }
-thiserror = { version = "2", optional = true }
-# toasty-cli's own error type, so `?` works in the migrate bin and in db.rs.
-anyhow = { version = "1", optional = true }
-tracing = { version = "0.1", optional = true }
-tracing-subscriber = { version = "0.3", features = [
-    "env-filter",
-], optional = true }
 
-axum = { version = "0.8", optional = true }
+# Client-only.
 console_error_panic_hook = { version = "0.1", optional = true }
-leptos_axum = { version = "0.8", optional = true }
-tokio = { version = "1", features = [
-    "rt-multi-thread",
-    "macros",
-    # `time` for the extraction request timeout, `fs` for image storage.
-    "time",
-    "fs",
-], optional = true }
-# Pinned exactly: the wasm-bindgen CLI that cargo-leptos runs must be the same
-# version as this crate, and nixpkgs' cargo-leptos is built with `no_downloads`
-# so it cannot fetch a matching one itself. Bumping this means bumping
-# `wasm-bindgen-cli_0_2_126` in flake.nix in the same commit.
+# Pinned exactly: the wasm-bindgen CLI cargo-leptos runs must match this crate,
+# and nixpkgs' cargo-leptos is built with `no_downloads` so it cannot fetch a
+# matching one. Bump `wasm-bindgen-cli_0_2_126` in flake.nix in the same commit.
 wasm-bindgen = { version = "=0.2.126", optional = true }
 
 [features]
+# Neither is default on purpose: the lib is built twice, once per target, and a
+# default would silently pull server deps into the wasm bundle.
 default = []
 hydrate = ["leptos/hydrate", "dep:console_error_panic_hook", "dep:wasm-bindgen"]
 ssr = [
-    "dep:axum",
-    "dep:tokio",
-    "dep:leptos_axum",
     "dep:toasty",
     "dep:toasty-cli",
+    "dep:axum",
+    "dep:leptos_axum",
+    "dep:tokio",
     "dep:serde_json",
+    "dep:async-trait",
+    "dep:anyhow",
+    "dep:thiserror",
+    "dep:tracing",
+    "dep:tracing-subscriber",
     "dep:rig-core",
     "dep:rig-agent",
     "dep:schemars",
     "dep:image",
     "dep:kamadak-exif",
     "dep:base64",
-    "dep:async-trait",
-    "dep:thiserror",
-    "dep:anyhow",
-    "dep:tracing",
-    "dep:tracing-subscriber",
     "leptos/ssr",
     "leptos_meta/ssr",
     "leptos_router/ssr",
 ]
 
-# Size-optimized profile for the WASM bundle in release mode.
 [profile.wasm-release]
 inherits = "release"
 opt-level = 'z'
@@ -108,25 +86,20 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
+# Everything cargo-leptos already defaults to is omitted: site-root, site-pkg-dir,
+# site-addr, reload-port, browserquery. `bin-default-features`/`lib-default-features`
+# are omitted too — with `default = []` there are no default features to turn off.
 [package.metadata.leptos]
-# Underscored: this is the JS/WASM bundle basename, referenced in app.rs as
-# /pkg/tally_ho.css and by the generated /pkg/tally_ho.js.
+# Underscored, and not the default: it would otherwise be the package name,
+# `tally-ho`, but the bundle is referenced as /pkg/tally_ho.css.
 output-name = "tally_ho"
-# Required once the crate has more than one bin target (src/bin/extract_probe.rs);
-# without it cargo-leptos cannot tell which binary is the server.
+# Required because there are other bin targets (migrate, extract_probe).
 bin-target = "tally-ho"
-site-root = "target/site"
-site-pkg-dir = "pkg"
-# Tailwind v4 is CSS-first. `tailwind-config-file` is deliberately omitted:
-# cargo-leptos only passes `--config` when that key is set, and it would
-# auto-generate a v3-style tailwind.config.js if the path didn't exist.
-tailwind-input-file = "style/tailwind.css"
-assets-dir = "public"
-site-addr = "127.0.0.1:3000"
-reload-port = 3001
-browserquery = "defaults"
 bin-features = ["ssr"]
-bin-default-features = false
 lib-features = ["hydrate"]
-lib-default-features = false
 lib-profile-release = "wasm-release"
+assets-dir = "public"
+# Tailwind v4 is CSS-first. `tailwind-config-file` is deliberately omitted:
+# cargo-leptos only passes `--config` when it is set, and would generate a
+# v3-style tailwind.config.js if the path didn't exist.
+tailwind-input-file = "style/tailwind.css"

@@ -12,6 +12,20 @@ fn url_from_env() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_URL.to_string())
 }
 
+/// Where the migrations, snapshots, and history file live.
+///
+/// toasty-cli resolves this relative to the working directory, which is fine in
+/// the repo but not for an installed binary — hence `MIGRATIONS_DIR`, which the
+/// Nix wrapper points at the copy in the store.
+///
+/// Built in code rather than read from a `Toasty.toml`: the defaults are already
+/// what we want, and `MigrationConfig` has no serde defaults, so a config file
+/// would have to spell out every field.
+pub fn migration_config() -> toasty_cli::Config {
+    let path = std::env::var("MIGRATIONS_DIR").unwrap_or_else(|_| "toasty".to_string());
+    toasty_cli::Config::new().migration(toasty_cli::MigrationConfig::new().path(path))
+}
+
 /// Connects without touching the schema.
 ///
 /// For the migrate binary, which is the thing that manages the schema and so
@@ -79,7 +93,7 @@ pub async fn connect_url(url: &str) -> anyhow::Result<toasty::Db> {
 /// migration in a transaction, so this is idempotent and a failure leaves the
 /// schema where it was.
 async fn apply_migrations(db: &toasty::Db) -> anyhow::Result<()> {
-    toasty_cli::ToastyCli::new(db.clone())
+    toasty_cli::ToastyCli::with_config(db.clone(), migration_config())
         .parse_from(["toasty", "migration", "apply"])
         .await
         .map_err(|e| {
@@ -135,7 +149,7 @@ mod tests {
     #[tokio::test]
     async fn the_models_match_the_latest_migration() {
         let db = super::connect_raw_url("sqlite::memory:").await.unwrap();
-        let config = toasty_cli::Config::default();
+        let config = super::migration_config();
 
         let history =
             toasty::migration::History::load_or_default(config.migration.get_history_file_path())

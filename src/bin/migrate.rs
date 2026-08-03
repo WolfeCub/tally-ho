@@ -11,11 +11,6 @@
 //! and an entry in `toasty/history.toml`. Review the SQL and commit all three.
 //! The app applies pending migrations on its next start, so `apply` is only
 //! needed if you want it to happen now. `drop` and `reset` are also available.
-//!
-//! No `Toasty.toml`: toasty-cli's defaults are already what we want (`toasty/`,
-//! sequential prefixes, statement breakpoints on), and its config struct has no
-//! serde defaults, so a config file would have to spell out every field —
-//! including `checksums`, which toasty 0.9 declares but never reads.
 
 #[cfg(feature = "ssr")]
 #[tokio::main]
@@ -30,7 +25,9 @@ async fn main() -> anyhow::Result<()> {
     // `connect_raw`, not `connect`: this binary manages the schema, so it must
     // not trigger the startup migration on the way in.
     let db = tally_ho::db::connect_raw().await?;
-    toasty_cli::ToastyCli::new(db).parse_and_run().await
+    toasty_cli::ToastyCli::with_config(db, tally_ho::db::migration_config())
+        .parse_and_run()
+        .await
 }
 
 #[cfg(not(feature = "ssr"))]
