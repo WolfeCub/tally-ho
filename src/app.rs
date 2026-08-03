@@ -37,7 +37,10 @@ pub fn App() -> impl IntoView {
         <Title text="tally-ho" />
 
         <Router>
-            <main class="px-safe pt-4 pb-28">
+            // Nav first so it can stick to the top on desktop. On a phone it is
+            // `fixed`, so DOM order doesn't affect where it lands.
+            <NavBar />
+            <main class="px-safe mx-auto w-full max-w-4xl pt-4 pb-28 md:pb-12">
                 <Routes fallback=|| view! { <p>"Not found."</p> }>
                     <Route path=path!("/") view=CapturePage />
                     <Route path=path!("/receipts") view=ReceiptListPage />
@@ -45,27 +48,36 @@ pub fn App() -> impl IntoView {
                     <Route path=path!("/period") view=PeriodPage />
                 </Routes>
             </main>
-            <TabBar />
         </Router>
     }
 }
 
+/// Thumb-reachable bottom bar on a phone, ordinary top bar on a desktop.
 #[component]
-fn TabBar() -> impl IntoView {
-    // min-h-11 is 44px — the smallest comfortable thumb target.
+fn NavBar() -> impl IntoView {
+    // min-h-11 is 44px — the smallest comfortable thumb target. Tabs split the
+    // width evenly on a phone; on desktop they shrink to their labels so they
+    // don't stretch across the page.
     let link = "flex min-h-11 flex-1 items-center justify-center text-sm text-muted \
-                no-underline active:bg-edge aria-[current=page]:text-paper";
+                no-underline active:bg-edge aria-[current=page]:text-paper \
+                md:flex-none md:px-4 md:hover:text-paper";
+    let bar = "pb-safe fixed inset-x-0 bottom-0 z-10 flex border-t border-edge bg-surface \
+               md:sticky md:top-0 md:bottom-auto md:border-t-0 md:border-b md:pb-0";
     view! {
-        <nav class="pb-safe fixed inset-x-0 bottom-0 z-10 flex border-t border-edge bg-surface">
-            <A href="/" attr:class=link>
-                "Capture"
-            </A>
-            <A href="/receipts" attr:class=link>
-                "Receipts"
-            </A>
-            <A href="/period" attr:class=link>
-                "Period"
-            </A>
+        <nav class=bar>
+            // Same max-width as <main>, so the tabs line up with the content.
+            <div class="px-safe mx-auto flex w-full max-w-4xl">
+                <span class="mr-auto hidden items-center pr-4 font-semibold md:flex">"tally-ho"</span>
+                <A href="/" attr:class=link>
+                    "Capture"
+                </A>
+                <A href="/receipts" attr:class=link>
+                    "Receipts"
+                </A>
+                <A href="/period" attr:class=link>
+                    "Period"
+                </A>
+            </div>
         </nav>
     }
 }
@@ -124,8 +136,10 @@ fn CapturePage() -> impl IntoView {
     view! {
         <h1 class="mb-4 text-xl font-semibold">"Capture"</h1>
 
+        // Capped on desktop: a file picker and one button have no business
+        // spanning the full content width.
         <form
-            class="flex flex-col gap-4"
+            class="flex flex-col gap-4 md:max-w-md"
             on:submit=move |ev: SubmitEvent| {
                 ev.prevent_default();
                 let form = ev.target().unwrap().unchecked_into::<HtmlFormElement>();
@@ -422,12 +436,22 @@ fn ReviewForm(
             {move || if reviewed { " · checked" } else { "" }}
         </h1>
 
-        // The photo is the source of truth; everything below is a claim about it.
-        <img
-            src=format!("/receipt-image/{id}")
-            alt="receipt photo"
-            class="mb-4 max-h-96 w-full rounded-lg border border-edge object-contain"
-        />
+        // Two columns once there's room: the photo stays put while you scroll the
+        // fields, which is the whole job of this screen. Stacked on a phone.
+        <div class="md:grid md:grid-cols-2 md:items-start md:gap-6">
+
+            // The photo is the source of truth; everything else is a claim about it.
+            <img
+                src=format!("/receipt-image/{id}")
+                alt="receipt photo"
+                // Underscores, not spaces, in the arbitrary value — and calc needs
+                // the spaces or Tailwind drops the class without a word.
+                class="mb-4 max-h-96 w-full rounded-lg border border-edge object-contain
+                       md:sticky md:top-16 md:mb-0 md:max-h-[calc(100vh_-_5rem)]"
+            />
+
+            // min-w-0 so long merchant names can't push the column wider than half.
+            <div class="min-w-0">
 
         {(!problems.is_empty())
             .then(|| {
@@ -600,6 +624,9 @@ fn ReviewForm(
                     </p>
                 }
             })}
+
+            </div>
+        </div>
     }
 }
 
@@ -692,14 +719,16 @@ fn PeriodPage() -> impl IntoView {
         range.set((parse(shown_from()), parse(shown_to())));
     };
 
-    let date_input = "min-h-11 flex-1 rounded-lg border border-edge bg-ink p-2";
+    let date_input = "min-h-11 flex-1 rounded-lg border border-edge bg-ink p-2 sm:flex-none";
 
     view! {
         <h1 class="mb-4 text-xl font-semibold">"Period"</h1>
 
         // Outside the Suspense on purpose: if the query fails, the controls to
         // ask for a different period must still be there.
-        <form class="mb-6 flex flex-col gap-2" on:submit=apply>
+        // One row as soon as it fits; stacked below that so the dates stay
+        // full-width and tappable.
+        <form class="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center" on:submit=apply>
             <div class="flex items-center gap-2">
                 // `value` is what the server renders; `prop:value` is what keeps
                 // the live DOM in step once hydrated.
@@ -761,13 +790,27 @@ fn PeriodBody(summary: crate::dto::PeriodSummary) -> impl IntoView {
 
     view! {
         <div class="mb-4 rounded-lg border border-edge bg-surface p-4">
-            <p class="text-sm text-muted">
-                {summary.from.to_string()} " – " {summary.to.to_string()}
-            </p>
-            <p class="text-3xl font-semibold tabular-nums">{money(summary.total.known())}</p>
-            <p class="text-sm text-muted">
-                {format!("{count} receipt{}", if count == 1 { "" } else { "s" })}
-            </p>
+            // Export sits beside the total rather than below the list: on desktop
+            // this screen exists to read the figure and take the CSV.
+            <div class="sm:flex sm:items-end sm:justify-between sm:gap-4">
+                <div>
+                    <p class="text-sm text-muted">
+                        {summary.from.to_string()} " – " {summary.to.to_string()}
+                    </p>
+                    <p class="text-3xl font-semibold tabular-nums">
+                        {money(summary.total.known())}
+                    </p>
+                    <p class="text-sm text-muted">
+                        {format!("{count} receipt{}", if count == 1 { "" } else { "s" })}
+                    </p>
+                </div>
+                <a
+                    href=export
+                    class="mt-3 flex min-h-11 items-center justify-center rounded-lg border border-edge px-4 no-underline sm:mt-0"
+                >
+                    "Export CSV"
+                </a>
+            </div>
 
             // The whole point of PeriodTotal being an enum: an incomplete figure
             // cannot be rendered as if it were the real one.
@@ -806,13 +849,6 @@ fn PeriodBody(summary: crate::dto::PeriodSummary) -> impl IntoView {
         } else {
             view! { <ReceiptRows rows=summary.receipts /> }.into_any()
         }}
-
-        <a
-            href=export
-            class="mt-6 block min-h-11 rounded-lg border border-edge bg-surface p-3 text-center no-underline"
-        >
-            "Export CSV"
-        </a>
     }
     .into_any()
 }
