@@ -52,10 +52,9 @@ pub struct Receipt {
 
 /// Human edits to a receipt's own fields.
 ///
-/// Money and dates travel as **strings**, exactly as typed. The server parses
-/// them with the same tested [`parse_money`](crate::dto)/`parse_date` routines
-/// the extractor uses, so "$12.34" and "8/12/21" work and there is one parsing
-/// implementation rather than two. An empty string clears an optional field.
+/// Money and dates travel as strings, exactly as typed, and the server parses them
+/// with the same routines the extractor uses — so "$12.34" and "8/12/21" work, and
+/// there's one parser rather than two. An empty string clears an optional field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceiptEdit {
     pub id: Uuid,
@@ -78,18 +77,11 @@ pub fn line_item_sum(items: &[LineItem]) -> Decimal {
     items.iter().map(|i| i.total).sum()
 }
 
-/// Everything wrong with a receipt, in the order a human should care.
+/// Everything wrong with a receipt, in the order a human should care. A list, not
+/// a bool, so the review screen can say *what* is wrong.
 ///
-/// A free function rather than a method so the period view can run the same
-/// checks over a summary row without materializing a whole [`Receipt`]. Returns
-/// a list rather than a bool so the review screen can say *what* is wrong — a
-/// receipt can be simultaneously missing a total and failing an arithmetic
-/// check.
-///
-/// Note what is deliberately *not* checked: line items against the total. Items
-/// are pre-tax, so on any taxed receipt that comparison reports a difference
-/// equal to the tax, which is not a problem at all. The two checks below are
-/// the ones that mean something.
+/// Note what isn't checked: line items against the total. Items are pre-tax, so on
+/// a taxed receipt that always looks off by the tax.
 pub fn problems_of(
     subtotal: Option<Decimal>,
     tax: Option<Decimal>,
@@ -172,11 +164,9 @@ pub struct ReceiptSummary {
 
 /// The total for a statement period.
 ///
-/// Deliberately not a bare `Decimal`. A receipt whose total could not be read
-/// must not contribute `0` — but quietly *excluding* it understates the period
-/// just as badly, and is harder to notice. Making this an enum means the UI
-/// cannot render a figure without also handling the incomplete case, so the
-/// number is never presented as trustworthy when it isn't.
+/// An enum, not a bare `Decimal`: an unreadable total must not count as 0, but
+/// silently dropping it understates the period just as badly and is harder to
+/// spot. This way the UI can't render a figure without handling that case.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PeriodTotal {
     /// Every receipt in the period has a total; this figure is complete.
@@ -226,15 +216,11 @@ pub struct PeriodSummary {
     pub from: jiff::civil::Date,
     pub to: jiff::civil::Date,
     pub receipts: Vec<ReceiptSummary>,
-    /// One total per currency, sorted by code — normally a single entry.
+    /// One total per currency, sorted by code — normally a single entry. Split up
+    /// because adding currencies together is arithmetic on different units, and
+    /// the extractor reads the currency off the receipt.
     ///
-    /// Split up because adding currencies together is arithmetic on different
-    /// units, and the extractor reads the currency off the receipt, so a stray
-    /// CAD one is possible. Conversion stays out of scope; this just avoids
-    /// pretending the sum means something.
-    ///
-    /// Folded in Rust: toasty exposes no SUM, and SQLite stores `Decimal` as TEXT,
-    /// which will not sum numerically in SQL.
+    /// Summed in Rust: toasty has no SUM, and SQLite holds `Decimal` as TEXT.
     pub totals: Vec<CurrencyTotal>,
 }
 
@@ -318,13 +304,11 @@ fn csv_field(value: &str) -> String {
     }
 }
 
-/// Escapes a field whose content came from the extractor, i.e. ultimately from
-/// an arbitrary image.
+/// Escapes a field the extractor read off an arbitrary image.
 ///
-/// A leading `=`, `+`, `@`, or a control character makes spreadsheets treat the
-/// cell as a formula. Applied only to text columns — the amount columns are
-/// rendered from `Decimal` by us, so a leading `-` there is a negative number
-/// and must survive untouched.
+/// A leading `=`, `+`, `@` or control character makes spreadsheets treat the cell
+/// as a formula. Text columns only — we render the amounts ourselves, and a leading
+/// `-` there is a negative number.
 fn csv_text(value: &str) -> String {
     let dangerous = matches!(value.chars().next(), Some('=' | '+' | '@' | '\t' | '\r'));
     if dangerous {
@@ -336,13 +320,11 @@ fn csv_text(value: &str) -> String {
 
 /// The period as a spreadsheet, one row per line item.
 ///
-/// `receipt_total` appears **only on a receipt's first row**, deliberately. It
-/// would otherwise repeat down every line item of the same receipt, and summing
-/// the column — the first thing anyone does — would multiply each receipt by its
-/// item count. Blank cells mean a plain `SUM` over that column is the period
-/// total.
+/// `receipt_total` appears only on a receipt's first row. Repeated on every row,
+/// summing the column would multiply each receipt by its item count. Blank cells
+/// mean a plain `SUM` gives the period total.
 ///
-/// `item_amount` does not sum to `receipt_total`: line items are pre-tax.
+/// `item_amount` won't sum to `receipt_total` — line items are pre-tax.
 pub fn receipts_to_csv(receipts: &[Receipt]) -> String {
     let mut out = String::from(
         "date,merchant,receipt_total,currency,item,item_amount,reviewed,receipt_id\r\n",

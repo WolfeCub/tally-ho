@@ -9,9 +9,8 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
         <html lang="en">
             <head>
                 <meta charset="utf-8" />
-                // viewport-fit=cover pairs with the px-safe/pb-safe utilities:
-                // required so content doesn't sit under the iOS notch and home
-                // indicator once installed to the home screen.
+                // viewport-fit=cover goes with the px-safe/pb-safe utilities, so
+                // content clears the iOS notch and home indicator once installed.
                 <meta
                     name="viewport"
                     content="width=device-width, initial-scale=1, viewport-fit=cover"
@@ -55,9 +54,8 @@ pub fn App() -> impl IntoView {
 /// Thumb-reachable bottom bar on a phone, ordinary top bar on a desktop.
 #[component]
 fn NavBar() -> impl IntoView {
-    // min-h-11 is 44px — the smallest comfortable thumb target. Tabs split the
-    // width evenly on a phone; on desktop they shrink to their labels so they
-    // don't stretch across the page.
+    // min-h-11 is 44px, the smallest comfortable thumb target. Tabs split the width
+    // on a phone and shrink to their labels on desktop.
     let link = "flex min-h-11 flex-1 items-center justify-center text-sm text-muted \
                 no-underline active:bg-edge aria-[current=page]:text-paper \
                 md:flex-none md:px-4 md:hover:text-paper";
@@ -199,9 +197,8 @@ fn CapturePage() -> impl IntoView {
                                 }
                                     .into_any()
                             }
-                            // The upload is done and the row exists, but the model
-                            // hasn't picked it up. Distinct from Extracting, since a
-                            // queue behind other uploads is why this can sit here.
+                            // Saved, but the model hasn't picked it up — usually a
+                            // queue behind other uploads.
                             Some(ExtractionStatus::Pending) => {
                                 view! {
                                     <Working label="Photo saved. Waiting for the model…" />
@@ -262,10 +259,8 @@ fn ReceiptListPage() -> impl IntoView {
     }
 }
 
-/// Display only — the CSV export and the edit inputs show raw values.
-///
-/// Decimal places come from the currency's minor unit, so JPY gets none.
-/// Negatives happen on refunds.
+/// Display only — the CSV export and the edit inputs show raw values. Decimal
+/// places come from the currency's minor unit, so JPY gets none.
 fn money(amount: rust_decimal::Decimal, currency: &str) -> String {
     let sign = if amount.is_sign_negative() { "-" } else { "" };
     let value = amount.abs();
@@ -280,10 +275,8 @@ fn money(amount: rust_decimal::Decimal, currency: &str) -> String {
     }
 }
 
-/// A total, with the ISO code spelled out.
-///
-/// ISO 4217 gives USD, CAD and AUD the same `$`, so a bare symbol on a summed
-/// figure is ambiguous in a way a single receipt's own row isn't.
+/// A total, with the ISO code spelled out — USD, CAD and AUD all use `$`, too
+/// ambiguous for a summed figure.
 fn money_total(amount: rust_decimal::Decimal, currency: &str) -> String {
     match iso_currency::Currency::from_code(currency) {
         Some(_) => format!("{} {currency}", money(amount, currency)),
@@ -484,14 +477,7 @@ fn ReviewForm(
         <div class="md:grid md:grid-cols-2 md:items-start md:gap-6">
 
             // The photo is the source of truth; everything else is a claim about it.
-            <img
-                src=format!("/receipt-image/{id}")
-                alt="receipt photo"
-                // Underscores, not spaces, in the arbitrary value — and calc needs
-                // the spaces or Tailwind drops the class without a word.
-                class="mb-4 max-h-96 w-full rounded-lg border border-edge object-contain
-                       md:sticky md:top-16 md:mb-0 md:max-h-[calc(100vh_-_5rem)]"
-            />
+            <ReceiptPhoto src=format!("/receipt-image/{id}") />
 
             // min-w-0 so long merchant names can't push the column wider than half.
             <div class="min-w-0">
@@ -673,6 +659,94 @@ fn ReviewForm(
     }
 }
 
+/// The receipt photo. Tap to fill the screen, tap again to zoom.
+#[component]
+fn ReceiptPhoto(src: String) -> impl IntoView {
+    let open = RwSignal::new(false);
+    let zoomed = RwSignal::new(false);
+    let dismiss = move || {
+        open.set(false);
+        zoomed.set(false);
+    };
+
+    // Focus the overlay when it opens, so Escape lands on it.
+    let overlay = NodeRef::<leptos::html::Div>::new();
+    Effect::new(move |_| {
+        if open.get()
+            && let Some(el) = overlay.get()
+        {
+            let _ = el.focus();
+        }
+    });
+
+    // Copy, so both the thumbnail and the overlay closures can read it. `Show`
+    // children have to be `Fn`, so a String can't just be moved in.
+    let src = StoredValue::new(src);
+
+    // Pinned, and scrolls its own overflow — a long receipt scaled to fit the
+    // viewport is unreadable. calc needs the spaces around the `-`, written as
+    // underscores, or Tailwind drops the class without a word.
+    let box_class = "mb-4 rounded-lg border border-edge md:sticky md:top-16 md:mb-0 \
+                     md:max-h-[calc(100vh_-_5rem)] md:overflow-y-auto";
+
+    view! {
+        <div class=box_class>
+            // A button, so it's reachable by keyboard and announced as activatable.
+            <button
+                type="button"
+                class="block w-full cursor-zoom-in"
+                aria-label="View photo full screen"
+                on:click=move |_| open.set(true)
+            >
+                <img
+                    src=move || src.get_value()
+                    alt="receipt photo"
+                    class="block max-h-96 w-full object-contain md:max-h-none"
+                />
+            </button>
+        </div>
+
+        // Sibling of the pinned box, not a child — a fixed overlay inside a sticky
+        // overflow-y-auto container doesn't behave.
+        <Show when=move || open.get()>
+            // Block, not flex: a flex item shrinks back under the container width,
+            // so the zoom below wouldn't hold. tabindex to take focus for Escape.
+            <div
+                node_ref=overlay
+                tabindex="-1"
+                class="fixed inset-0 z-50 overflow-auto bg-ink/95"
+                on:keydown=move |ev: leptos::web_sys::KeyboardEvent| {
+                    if ev.key() == "Escape" {
+                        dismiss();
+                    }
+                }
+            >
+                // Fit fills the width and scrolls down; zoom widens past the
+                // viewport and scrolls both ways.
+                <img
+                    src=move || src.get_value()
+                    alt="receipt photo"
+                    class=move || {
+                        if zoomed.get() {
+                            "block w-[250%] max-w-none cursor-zoom-out"
+                        } else {
+                            "block w-full cursor-zoom-in"
+                        }
+                    }
+                    on:click=move |_| zoomed.update(|z| *z = !*z)
+                />
+                <button
+                    type="button"
+                    class="fixed top-2 right-2 flex min-h-11 items-center rounded-lg border border-edge bg-surface px-4"
+                    on:click=move |_| dismiss()
+                >
+                    "Close"
+                </button>
+            </div>
+        </Show>
+    }
+}
+
 #[component]
 fn LabeledInput(
     label: &'static str,
@@ -720,9 +794,9 @@ fn PeriodPage() -> impl IntoView {
     use crate::api::receipts_in_range;
     use jiff::civil::Date;
 
-    // What the user has typed, empty until they touch a picker. The default
-    // period is the server's to pick — `jiff` has no clock on wasm without its
-    // `js` feature — so an untouched input shows whatever period came back.
+    // What the user has typed, empty until they touch a picker. The server picks
+    // the default period, since `jiff` has no clock on wasm without its `js`
+    // feature, so an untouched input shows whatever came back.
     let from_str = RwSignal::new(String::new());
     let to_str = RwSignal::new(String::new());
 
@@ -730,11 +804,9 @@ fn PeriodPage() -> impl IntoView {
     // doesn't fire a request per keystroke and half-entered ranges never load.
     // `(None, None)` asks the server for its default.
     let range = RwSignal::new((None::<Date>, None::<Date>));
-    // Blocking so the whole period arrives in the initial HTML rather than being
-    // streamed in after it. One local SQLite read, so the cost to first byte is
-    // negligible. (This does not fill the date inputs below: reading a resource
-    // synchronously outside a Suspense yields nothing on the server, so those
-    // populate on hydration.)
+    // Blocking so the period arrives in the initial HTML instead of streaming in.
+    // The date inputs still fill on hydration — reading a resource outside a
+    // Suspense gives nothing on the server.
     let summary = Resource::new_blocking(
         move || range.get(),
         |(from, to)| async move { receipts_in_range(from, to).await },
@@ -755,9 +827,8 @@ fn PeriodPage() -> impl IntoView {
 
     let apply = move |ev: leptos::web_sys::SubmitEvent| {
         ev.prevent_default();
-        // An unparseable or blank end falls back to the server default, which is
-        // what the input was already showing. `<input type="date">` only ever
-        // yields YYYY-MM-DD or an empty string; this also covers manual entry.
+        // A blank or unparseable end falls back to the server default, which is
+        // what the input was showing anyway.
         let parse = |s: String| s.trim().parse::<Date>().ok();
         range.set((parse(shown_from()), parse(shown_to())));
     };
@@ -767,10 +838,8 @@ fn PeriodPage() -> impl IntoView {
     view! {
         <h1 class="mb-4 text-xl font-semibold">"Period"</h1>
 
-        // Outside the Suspense on purpose: if the query fails, the controls to
-        // ask for a different period must still be there.
-        // One row as soon as it fits; stacked below that so the dates stay
-        // full-width and tappable.
+        // Outside the Suspense on purpose: if the query fails, you still need the
+        // controls to ask for a different period. One row as soon as it fits.
         <form class="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center" on:submit=apply>
             <div class="flex items-center gap-2">
                 // `value` is what the server renders; `prop:value` is what keeps
@@ -817,9 +886,8 @@ fn PeriodBody(summary: crate::dto::PeriodSummary) -> impl IntoView {
     // can never disagree with the figures on screen.
     let export = format!("/export.csv?from={}&to={}", summary.from, summary.to);
 
-    // An end date before the start matches nothing, which would otherwise render
-    // as a confident "0.00 · 0 receipts" — indistinguishable from a month in
-    // which nothing was bought.
+    // A backwards range matches nothing, which would otherwise look exactly like a
+    // month where nothing was bought.
     if summary.from > summary.to {
         return view! {
             <p class="rounded-lg border border-danger p-3 text-danger">
@@ -831,8 +899,8 @@ fn PeriodBody(summary: crate::dto::PeriodSummary) -> impl IntoView {
 
     view! {
         <div class="mb-4 rounded-lg border border-edge bg-surface p-4">
-            // Export sits beside the total rather than below the list: on desktop
-            // this screen exists to read the figure and take the CSV.
+            // Export sits beside the total, not below the list — on desktop this
+            // screen exists to read the figure and grab the CSV.
             <div class="sm:flex sm:items-end sm:justify-between sm:gap-4">
                 <div>
                     <p class="text-sm text-muted">
@@ -862,11 +930,9 @@ fn PeriodBody(summary: crate::dto::PeriodSummary) -> impl IntoView {
                         {format!("{count} receipt{}", if count == 1 { "" } else { "s" })}
                     </p>
                 </div>
-                // `download` is load-bearing, not decoration: leptos_router
-                // intercepts same-origin anchor clicks unless the link has
-                // `download` or rel="external", so without it this navigates the
-                // SPA to /export.csv and renders the router's not-found page. The
-                // filename still comes from Content-Disposition.
+                // `download` is required: leptos_router intercepts same-origin
+                // anchors without it and navigates the SPA to /export.csv, which
+                // renders the not-found page. Content-Disposition names the file.
                 <a
                     href=export
                     download
@@ -876,8 +942,7 @@ fn PeriodBody(summary: crate::dto::PeriodSummary) -> impl IntoView {
                 </a>
             </div>
 
-            // The whole point of PeriodTotal being an enum: an incomplete figure
-            // cannot be rendered as if it were the real one.
+            // The figures above exclude receipts with no total, so say so.
             {
                 let missing: usize = summary.totals.iter().map(|t| t.total.missing()).sum();
                 (missing > 0)

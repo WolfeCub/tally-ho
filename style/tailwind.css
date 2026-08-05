@@ -18,8 +18,11 @@
   body {
     background-color: var(--color-ink);
     color: var(--color-paper);
-    /* A mistyped width shouldn't hand a phone a horizontal scrollbar. */
-    overflow-x: hidden;
+    /* A mistyped width shouldn't hand a phone a horizontal scrollbar. Must be
+       clip, not hidden — hidden on one axis makes the other compute to auto,
+       turning body into a scroll container, which breaks every position:sticky
+       on the page. */
+    overflow-x: clip;
   }
 
   /* Below 16px, iOS Safari zooms the viewport when an input takes focus. */
