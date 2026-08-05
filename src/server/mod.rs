@@ -104,6 +104,7 @@ pub fn to_dto_summary(receipt: &models::Receipt, items: &[models::LineItem]) -> 
         purchased_on: receipt.purchased_on,
         merchant: receipt.merchant.clone(),
         total: receipt.total,
+        currency: receipt.currency.clone(),
         status: to_dto_status(&receipt.status),
         item_count: items.len(),
         reviewed: receipt.reviewed_at.is_some(),
@@ -185,9 +186,11 @@ mod tests {
             .collect();
         let period = dto::PeriodSummary::new(from, to, summaries);
 
-        assert_eq!(period.total.known(), dec("32.00"));
-        assert_eq!(period.total.missing(), 1, "the unreadable receipt");
-        assert!(!period.total.is_complete());
+        assert_eq!(period.totals.len(), 1, "both receipts are USD");
+        assert_eq!(period.totals[0].currency, "USD");
+        assert_eq!(period.totals[0].total.known(), dec("32.00"));
+        assert_eq!(period.totals[0].total.missing(), 1, "the unreadable receipt");
+        assert!(!period.totals[0].total.is_complete());
 
         // Costco balances (30 + 2 = 32, items = 30); the other is only missing a
         // total, so exactly one problem each way.

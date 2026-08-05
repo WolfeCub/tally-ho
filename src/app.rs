@@ -161,10 +161,11 @@ fn CapturePage() -> impl IntoView {
             </button>
         </form>
 
-        <div class="mt-6">
+        // aria-live so the stages are announced as they change, not just drawn.
+        <div class="mt-6" aria-live="polite">
             {move || {
                 if upload.pending().get() {
-                    return view! { <p class="text-muted">"Uploading photo…"</p> }.into_any();
+                    return view! { <Working label="Sending the photo…" /> }.into_any();
                 }
                 match upload.value().get() {
                     None => view! { <p class="text-muted">"Photograph a receipt."</p> }.into_any(),
@@ -173,11 +174,10 @@ fn CapturePage() -> impl IntoView {
                             .into_any()
                     }
                     Some(Ok(id)) => {
-                        let settled = status.get().flatten();
-                        match settled {
+                        match status.get().flatten() {
                             Some(ExtractionStatus::Done) => {
                                 view! {
-                                    <p class="mb-3">"Extraction finished."</p>
+                                    <p class="mb-3">"Done reading the receipt."</p>
                                     <a
                                         href=format!("/receipt/{id}")
                                         class="inline-block rounded-lg border border-edge bg-surface px-4 py-3"
@@ -189,7 +189,7 @@ fn CapturePage() -> impl IntoView {
                             }
                             Some(ExtractionStatus::Failed) => {
                                 view! {
-                                    <p class="text-danger mb-3">"Extraction failed."</p>
+                                    <p class="text-danger mb-3">"Could not read the receipt."</p>
                                     <a
                                         href=format!("/receipt/{id}")
                                         class="inline-block rounded-lg border border-edge bg-surface px-4 py-3"
@@ -199,20 +199,42 @@ fn CapturePage() -> impl IntoView {
                                 }
                                     .into_any()
                             }
-                            // Pending, Extracting, or not yet polled.
-                            _ => {
+                            // The upload is done and the row exists, but the model
+                            // hasn't picked it up. Distinct from Extracting, since a
+                            // queue behind other uploads is why this can sit here.
+                            Some(ExtractionStatus::Pending) => {
                                 view! {
-                                    <p class="text-muted">
-                                        "Reading the receipt… this takes about 10 seconds."
-                                    </p>
+                                    <Working label="Photo saved. Waiting for the model…" />
                                 }
                                     .into_any()
                             }
+                            Some(ExtractionStatus::Extracting) => {
+                                view! {
+                                    <Working label="Reading the receipt… about 10 seconds." />
+                                }
+                                    .into_any()
+                            }
+                            // Uploaded, but the first poll hasn't landed yet.
+                            None => view! { <Working label="Photo saved." /> }.into_any(),
                         }
                     }
                 }
             }}
         </div>
+    }
+}
+
+/// A spinner and a label, so a slow stage doesn't read as a frozen page.
+#[component]
+fn Working(#[prop(into)] label: String) -> impl IntoView {
+    view! {
+        <p class="flex items-center gap-3 text-muted">
+            <span
+                class="inline-block size-4 shrink-0 animate-spin rounded-full border-2 border-edge border-t-paper"
+                aria-hidden="true"
+            ></span>
+            {label}
+        </p>
     }
 }
 
@@ -240,13 +262,34 @@ fn ReceiptListPage() -> impl IntoView {
     }
 }
 
-/// Money as it is shown, always to the cent.
+/// Display only — the CSV export and the edit inputs show raw values.
 ///
-/// Display-only. The CSV export deliberately does *not* go through this: an
-/// export is meant to be a faithful copy of what is stored, not a rounded view
-/// of it.
-fn money(amount: rust_decimal::Decimal) -> String {
-    format!("{amount:.2}")
+/// Decimal places come from the currency's minor unit, so JPY gets none.
+/// Negatives happen on refunds.
+fn money(amount: rust_decimal::Decimal, currency: &str) -> String {
+    let sign = if amount.is_sign_negative() { "-" } else { "" };
+    let value = amount.abs();
+
+    match iso_currency::Currency::from_code(currency) {
+        Some(iso) => {
+            let precision = iso.exponent().unwrap_or(2) as usize;
+            format!("{sign}{}{value:.precision$}", iso.symbol())
+        }
+        // Not a currency code we recognise, so show it verbatim.
+        None => format!("{sign}{value:.2} {currency}"),
+    }
+}
+
+/// A total, with the ISO code spelled out.
+///
+/// ISO 4217 gives USD, CAD and AUD the same `$`, so a bare symbol on a summed
+/// figure is ambiguous in a way a single receipt's own row isn't.
+fn money_total(amount: rust_decimal::Decimal, currency: &str) -> String {
+    match iso_currency::Currency::from_code(currency) {
+        Some(_) => format!("{} {currency}", money(amount, currency)),
+        // Already ends in the code.
+        None => money(amount, currency),
+    }
 }
 
 /// The receipt list, shared by the list tab and the period view.
@@ -266,7 +309,7 @@ fn ReceiptRows(rows: Vec<crate::dto::ReceiptSummary>) -> impl IntoView {
                         ExtractionStatus::Done | ExtractionStatus::Failed,
                     );
                     let total = match r.total {
-                        Some(t) => money(t),
+                        Some(t) => money(t, &r.currency),
                         None if pending => "reading…".to_string(),
                         None => "no total".to_string(),
                     };
@@ -768,8 +811,6 @@ fn PeriodPage() -> impl IntoView {
 
 #[component]
 fn PeriodBody(summary: crate::dto::PeriodSummary) -> impl IntoView {
-    use crate::dto::PeriodTotal;
-
     let count = summary.receipts.len();
     let attention = summary.needing_attention();
     // Built from the loaded period rather than the input signals, so the export
@@ -797,15 +838,38 @@ fn PeriodBody(summary: crate::dto::PeriodSummary) -> impl IntoView {
                     <p class="text-sm text-muted">
                         {summary.from.to_string()} " – " {summary.to.to_string()}
                     </p>
-                    <p class="text-3xl font-semibold tabular-nums">
-                        {money(summary.total.known())}
-                    </p>
+
+                    // One figure per currency, so nothing adds different units
+                    // together. Almost always a single line.
+                    {if summary.totals.is_empty() {
+                        view! { <p class="text-3xl font-semibold text-muted">"—"</p> }.into_any()
+                    } else {
+                        summary
+                            .totals
+                            .iter()
+                            .map(|t| {
+                                view! {
+                                    <p class="text-3xl font-semibold tabular-nums">
+                                        {money_total(t.total.known(), &t.currency)}
+                                    </p>
+                                }
+                            })
+                            .collect_view()
+                            .into_any()
+                    }}
+
                     <p class="text-sm text-muted">
                         {format!("{count} receipt{}", if count == 1 { "" } else { "s" })}
                     </p>
                 </div>
+                // `download` is load-bearing, not decoration: leptos_router
+                // intercepts same-origin anchor clicks unless the link has
+                // `download` or rel="external", so without it this navigates the
+                // SPA to /export.csv and renders the router's not-found page. The
+                // filename still comes from Content-Disposition.
                 <a
                     href=export
+                    download
                     class="mt-3 flex min-h-11 items-center justify-center rounded-lg border border-edge px-4 no-underline sm:mt-0"
                 >
                     "Export CSV"
@@ -814,21 +878,21 @@ fn PeriodBody(summary: crate::dto::PeriodSummary) -> impl IntoView {
 
             // The whole point of PeriodTotal being an enum: an incomplete figure
             // cannot be rendered as if it were the real one.
-            {match summary.total {
-                PeriodTotal::Complete(_) => ().into_any(),
-                PeriodTotal::Partial { missing, .. } => {
-                    view! {
-                        <p class="mt-2 rounded-lg border border-danger p-2 text-sm text-danger">
-                            {format!(
-                                "This is a floor, not the total: {missing} receipt{} ha{} no amount yet.",
-                                if missing == 1 { "" } else { "s" },
-                                if missing == 1 { "s" } else { "ve" },
-                            )}
-                        </p>
-                    }
-                        .into_any()
-                }
-            }}
+            {
+                let missing: usize = summary.totals.iter().map(|t| t.total.missing()).sum();
+                (missing > 0)
+                    .then(|| {
+                        view! {
+                            <p class="mt-2 rounded-lg border border-danger p-2 text-sm text-danger">
+                                {format!(
+                                    "This is a floor, not the total: {missing} receipt{} ha{} no amount yet.",
+                                    if missing == 1 { "" } else { "s" },
+                                    if missing == 1 { "s" } else { "ve" },
+                                )}
+                            </p>
+                        }
+                    })
+            }
         </div>
 
         {(attention > 0)

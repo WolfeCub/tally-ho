@@ -16,6 +16,8 @@ leptos_meta = "0.8"
 serde = { version = "1", features = ["derive"] }
 jiff = { version = "0.2", features = ["serde"] }
 rust_decimal = { version = "1.41", features = ["serde"] }
+# Currency symbols and minor units for display.
+iso_currency = "0.5"
 # No `v4`/`v7`: the client only parses ids, and a version feature would demand a
 # wasm randomness source.
 uuid = { version = "1", features = ["serde"] }

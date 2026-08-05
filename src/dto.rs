@@ -159,6 +159,9 @@ pub struct ReceiptSummary {
     pub merchant: String,
     /// `None` when extraction could not read a total and nobody has fixed it.
     pub total: Option<Decimal>,
+    /// ISO code. Carried so a row can be labelled with the right symbol — the
+    /// extractor infers this from the receipt, so it is not always USD.
+    pub currency: String,
     pub status: ExtractionStatus,
     pub item_count: usize,
     pub reviewed: bool,
@@ -223,8 +226,23 @@ pub struct PeriodSummary {
     pub from: jiff::civil::Date,
     pub to: jiff::civil::Date,
     pub receipts: Vec<ReceiptSummary>,
-    /// Folded in Rust: toasty exposes no SUM, and SQLite stores `Decimal` as
-    /// TEXT, which will not sum numerically in SQL.
+    /// One total per currency, sorted by code — normally a single entry.
+    ///
+    /// Split up because adding currencies together is arithmetic on different
+    /// units, and the extractor reads the currency off the receipt, so a stray
+    /// CAD one is possible. Conversion stays out of scope; this just avoids
+    /// pretending the sum means something.
+    ///
+    /// Folded in Rust: toasty exposes no SUM, and SQLite stores `Decimal` as TEXT,
+    /// which will not sum numerically in SQL.
+    pub totals: Vec<CurrencyTotal>,
+}
+
+/// A period's total for one currency.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CurrencyTotal {
+    /// ISO code, e.g. `USD`.
+    pub currency: String,
     pub total: PeriodTotal,
 }
 
@@ -241,12 +259,31 @@ impl PeriodSummary {
                 .cmp(&b.purchased_on)
                 .then_with(|| a.merchant.cmp(&b.merchant))
         });
-        let known = receipts.iter().filter_map(|r| r.total).sum();
-        let missing = receipts.iter().filter(|r| r.total.is_none()).count();
+        // BTreeMap so the order is by currency code and therefore stable.
+        let mut grouped: std::collections::BTreeMap<&str, (Decimal, usize)> =
+            std::collections::BTreeMap::new();
+        for r in &receipts {
+            let entry = grouped
+                .entry(r.currency.as_str())
+                .or_insert((Decimal::ZERO, 0));
+            match r.total {
+                Some(t) => entry.0 += t,
+                // Counted, never treated as zero.
+                None => entry.1 += 1,
+            }
+        }
+        let totals = grouped
+            .into_iter()
+            .map(|(currency, (known, missing))| CurrencyTotal {
+                currency: currency.to_string(),
+                total: PeriodTotal::new(known, missing),
+            })
+            .collect();
+
         Self {
             from,
             to,
-            total: PeriodTotal::new(known, missing),
+            totals,
             receipts,
         }
     }
@@ -353,16 +390,27 @@ mod tests {
     }
 
     fn summary(total: Option<&str>) -> ReceiptSummary {
+        summary_in("USD", total)
+    }
+
+    fn summary_in(currency: &str, total: Option<&str>) -> ReceiptSummary {
         ReceiptSummary {
             id: Uuid::nil(),
             purchased_on: jiff::civil::date(2026, 7, 1),
             merchant: "M".into(),
             total: total.map(dec),
+            currency: currency.into(),
             status: ExtractionStatus::Done,
             item_count: 1,
             reviewed: false,
             problems: Vec::new(),
         }
+    }
+
+    /// The period's only total, for the single-currency cases below.
+    fn only(s: &PeriodSummary) -> &PeriodTotal {
+        assert_eq!(s.totals.len(), 1, "expected one currency: {:?}", s.totals);
+        &s.totals[0].total
     }
 
     #[test]
@@ -372,9 +420,10 @@ mod tests {
             jiff::civil::date(2026, 7, 31),
             vec![summary(Some("10.00")), summary(Some("5.50"))],
         );
-        assert!(s.total.is_complete());
-        assert_eq!(s.total.known(), dec("15.50"));
-        assert_eq!(s.total.missing(), 0);
+        assert_eq!(s.totals[0].currency, "USD");
+        assert!(only(&s).is_complete());
+        assert_eq!(only(&s).known(), dec("15.50"));
+        assert_eq!(only(&s).missing(), 0);
     }
 
     /// The load-bearing case: a receipt with no total must neither contribute
@@ -386,10 +435,39 @@ mod tests {
             jiff::civil::date(2026, 7, 31),
             vec![summary(Some("10.00")), summary(None), summary(Some("5.50"))],
         );
-        assert!(!s.total.is_complete(), "must not claim to be complete");
-        assert_eq!(s.total.known(), dec("15.50"), "known excludes the unknown");
-        assert_eq!(s.total.missing(), 1);
-        assert!(matches!(s.total, PeriodTotal::Partial { .. }));
+        assert!(!only(&s).is_complete(), "must not claim to be complete");
+        assert_eq!(only(&s).known(), dec("15.50"), "known excludes the unknown");
+        assert_eq!(only(&s).missing(), 1);
+        assert!(matches!(only(&s), PeriodTotal::Partial { .. }));
+    }
+
+    /// Currencies are never added together. The extractor reads the currency off
+    /// the receipt, so one stray CAD receipt in a USD month is reachable, and
+    /// summing the two would silently invent money.
+    #[test]
+    fn each_currency_gets_its_own_total() {
+        let s = PeriodSummary::new(
+            jiff::civil::date(2026, 7, 1),
+            jiff::civil::date(2026, 7, 31),
+            vec![
+                summary_in("USD", Some("10.00")),
+                summary_in("CAD", Some("7.00")),
+                summary_in("USD", Some("5.50")),
+                // Missing totals belong to their own currency's tally.
+                summary_in("CAD", None),
+            ],
+        );
+
+        // Sorted by code, so CAD comes first.
+        let codes: Vec<_> = s.totals.iter().map(|t| t.currency.as_str()).collect();
+        assert_eq!(codes, ["CAD", "USD"]);
+
+        assert_eq!(s.totals[0].total.known(), dec("7.00"));
+        assert_eq!(s.totals[0].total.missing(), 1);
+        assert!(!s.totals[0].total.is_complete());
+
+        assert_eq!(s.totals[1].total.known(), dec("15.50"));
+        assert!(s.totals[1].total.is_complete());
     }
 
     fn item(total: &str) -> LineItem {
@@ -480,15 +558,17 @@ mod tests {
         assert_eq!(r.problems().len(), 2, "got {:?}", r.problems());
     }
 
+    /// No receipts means no currency to report a total in, rather than a zero in
+    /// some assumed one.
     #[test]
-    fn an_empty_period_is_complete_at_zero() {
+    fn an_empty_period_has_no_totals() {
         let s = PeriodSummary::new(
             jiff::civil::date(2026, 7, 1),
             jiff::civil::date(2026, 7, 31),
             vec![],
         );
-        assert!(s.total.is_complete());
-        assert_eq!(s.total.known(), Decimal::ZERO);
+        assert!(s.totals.is_empty());
+        assert_eq!(s.needing_attention(), 0);
     }
 
     /// A taxed receipt that balances perfectly must not be flagged. This is the
