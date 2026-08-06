@@ -16,6 +16,10 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                     content="width=device-width, initial-scale=1, viewport-fit=cover"
                 />
                 <meta name="theme-color" content="#16181a" />
+                // Manifest plus HTTPS is all it takes to be installable — Chrome
+                // dropped the service-worker requirement for menu install in 108.
+                <link rel="manifest" href="/manifest.webmanifest" />
+                <link rel="icon" type="image/png" href="/favicon.png" />
                 <AutoReload options=options.clone() />
                 <HydrationScripts options />
                 <MetaTags />
