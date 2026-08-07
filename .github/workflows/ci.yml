@@ -14,12 +14,12 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # nix-quick-install rather than install-nix-action: it's what
       # cache-nix-action is built against, and it needs the keep-* settings so GC
       # doesn't drop the things we're caching.
-      - uses: nixbuild/nix-quick-install-action@v30
+      - uses: nixbuild/nix-quick-install-action@v35
         with:
           nix_conf: |
             experimental-features = nix-command flakes
