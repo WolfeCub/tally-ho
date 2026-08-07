@@ -30,8 +30,8 @@
           targets = ["wasm32-unknown-unknown"];
         };
 
-        # This cargo-leptos is built with no_downloads, so it won't fetch these.
-        # A missing one is a hard error.
+        # cargo-leptos here is built with no_downloads, so it won't fetch any of
+        # these itself. A missing one is a hard error.
         leptosTools = [
           pkgs.cargo-leptos
           pkgs.tailwindcss_4
@@ -40,13 +40,10 @@
           pkgs.wasm-bindgen-cli_0_2_126
         ];
 
-        # cargo leptos runs cargo twice, so any builder needs its build command
-        # swapped out. crane makes that a plain argument.
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
         # Allowlist, so touching flake.nix or CI doesn't rebuild the app.
-        # filterCargoSources covers *.rs, *.toml and Cargo.lock
-        # ./. filters to .gitignore since flakes are git based
+        # filterCargoSources covers *.rs, *.toml and Cargo.lock.
         src = pkgs.lib.cleanSourceWith {
           name = "tally-ho-src";
           src = ./.;
@@ -67,14 +64,18 @@
           version = "0.1.0";
           strictDeps = true;
           nativeBuildInputs = leptosTools;
+
+          # cargo fingerprints this into leptos_config, so every cargo run here
+          # has to agree or that crate and the five below it rebuild. Keep it
+          # matching output-name.
+          LEPTOS_OUTPUT_NAME = "tally_ho";
         };
 
         tally-ho = craneLib.buildPackage (common
           // {
-            # crane primes deps for one target; cargo leptos needs two. The
-            # client half is a separate target dir, triple and profile, so
-            # nothing crane caches applies to it and all ~190 of its deps
-            # rebuild every time. Flags must match what cargo leptos runs.
+            # crane primes one target, cargo leptos builds two. The client half
+            # has its own target dir, triple and profile, so without this its
+            # ~190 deps rebuild every time. Flags have to match cargo leptos'.
             cargoArtifacts = craneLib.buildDepsOnly (common
               // {
                 cargoExtraArgs = "--locked --features ssr";
@@ -87,8 +88,8 @@
               });
 
             buildPhaseCargoCommand = "cargo leptos build --release";
-            # Plain cargo test, not `cargo leptos test`. Means a build also fails if
-            # the models have drifted from the migrations.
+            # Plain cargo test, so a build also fails when the models have
+            # drifted from the migrations.
             cargoTestCommand = "cargo test --release --features ssr";
 
             nativeBuildInputs = common.nativeBuildInputs ++ [pkgs.makeWrapper];
@@ -97,8 +98,8 @@
             # writes none, and the hook is fatal, so the build dies without this.
             doNotPostBuildInstallCargoBinaries = true;
 
-            # 0.3.7 puts the binary in target/release, not target/server/release like
-            # older templates. Only bin-target is built, so no `migrate` here.
+            # cargo-leptos 0.3.7 puts the binary in target/release. Only
+            # bin-target gets built, so there's no `migrate` to install.
             installPhaseCommand = ''
               mkdir -p $out/bin $out/share/tally-ho
               cp -r target/site toasty $out/share/tally-ho/
@@ -163,14 +164,13 @@
 
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
 
-          # So `cargo leptos watch` needs no env prefix. Override inline:
-          # `OLLAMA_VISION_MODEL=qwen3-vl:8b cargo leptos watch`.
+          # So `cargo leptos watch` needs no env prefix.
           DATABASE_URL = "sqlite:./data/tally-ho.db";
           DATA_DIR = "./data";
           # Ollama runs on the OrbStack host, not in here.
           OLLAMA_URL = "http://host.orb.internal:11434";
           OLLAMA_VISION_MODEL = "gemma4:12b";
-          # What extraction was tuned against. Going lower doesn't help; prefill is
+          # What extraction was tuned against. Lower doesn't help — prefill is
           # ~1s at any size.
           MAX_IMAGE_EDGE = "1024";
           RUST_LOG = "info,tally_ho=debug";

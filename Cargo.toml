@@ -18,8 +18,8 @@ jiff = { version = "0.2", features = ["serde"] }
 rust_decimal = { version = "1.41", features = ["serde"] }
 # Currency symbols and minor units for display.
 iso_currency = "0.5"
-# No `v4`/`v7`: the client only parses ids, and a version feature would demand a
-# wasm randomness source.
+# No `v4`/`v7`: the client only parses ids, and those need a wasm randomness
+# source.
 uuid = { version = "1", features = ["serde"] }
 
 # Server-only, hence `optional` + the `ssr` feature below. Most of these will not
@@ -48,9 +48,8 @@ base64 = { version = "0.22", optional = true }
 
 # Client-only.
 console_error_panic_hook = { version = "0.1", optional = true }
-# Pinned exactly: the wasm-bindgen CLI cargo-leptos runs must match this crate,
-# and nixpkgs' cargo-leptos is built with `no_downloads` so it cannot fetch a
-# matching one. Bump `wasm-bindgen-cli_0_2_126` in flake.nix in the same commit.
+# Pinned: the wasm-bindgen CLI cargo-leptos runs has to match this exactly, and
+# it can't fetch one. Bump `wasm-bindgen-cli_0_2_126` in flake.nix to match.
 wasm-bindgen = { version = "=0.2.126", optional = true }
 
 [features]
@@ -88,12 +87,14 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
-# Everything cargo-leptos already defaults to is omitted: site-root, site-pkg-dir,
-# site-addr, reload-port, browserquery. `bin-default-features`/`lib-default-features`
-# are omitted too — with `default = []` there are no default features to turn off.
 [package.metadata.leptos]
-# Underscored, and not the default: it would otherwise be the package name,
-# `tally-ho`, but the bundle is referenced as /pkg/tally_ho.css.
+# `default` is empty so these enable nothing. They stop cargo leptos passing
+# --no-default-features, which the nix build would then have to pass too — cargo
+# compares feature names, and "default" in the list counts as a difference.
+bin-default-features = true
+lib-default-features = true
+# Underscored: it would otherwise be the package name, `tally-ho`, but the
+# bundle is referenced as /pkg/tally_ho.css.
 output-name = "tally_ho"
 # Required because there are other bin targets (migrate, extract_probe).
 bin-target = "tally-ho"
@@ -101,7 +102,4 @@ bin-features = ["ssr"]
 lib-features = ["hydrate"]
 lib-profile-release = "wasm-release"
 assets-dir = "public"
-# Tailwind v4 is CSS-first. `tailwind-config-file` is deliberately omitted:
-# cargo-leptos only passes `--config` when it is set, and would generate a
-# v3-style tailwind.config.js if the path didn't exist.
 tailwind-input-file = "style/tailwind.css"
