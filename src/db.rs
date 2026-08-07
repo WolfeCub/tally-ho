@@ -159,7 +159,10 @@ mod tests {
             .last()
             .expect("no migrations yet — run: migration generate --name init");
         let snapshot = toasty::migration::Snapshot::load(
-            config.migration.get_snapshots_dir().join(&latest.snapshot_name),
+            config
+                .migration
+                .get_snapshots_dir()
+                .join(&latest.snapshot_name),
         )
         .unwrap();
 

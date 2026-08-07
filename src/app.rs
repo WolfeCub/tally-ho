@@ -448,9 +448,7 @@ fn ReviewForm(
         }
     });
 
-    let money = |d: Option<rust_decimal::Decimal>| {
-        d.map(|v| v.to_string()).unwrap_or_default()
-    };
+    let money = |d: Option<rust_decimal::Decimal>| d.map(|v| v.to_string()).unwrap_or_default();
 
     // Collapses the five actions' errors into one place, so a failed save is
     // never silent.

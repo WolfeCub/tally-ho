@@ -69,10 +69,12 @@ impl Store {
         let absolute = self.absolute(&relative);
 
         if let Some(parent) = absolute.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|source| StoreError::Io {
-                path: parent.display().to_string(),
-                source,
-            })?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|source| StoreError::Io {
+                    path: parent.display().to_string(),
+                    source,
+                })?;
         }
         tokio::fs::write(&absolute, bytes)
             .await

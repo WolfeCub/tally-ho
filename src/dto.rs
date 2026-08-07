@@ -173,10 +173,7 @@ pub enum PeriodTotal {
     Complete(Decimal),
     /// Some receipts have no total yet. `known` excludes them entirely — it is
     /// a floor, not the real figure.
-    Partial {
-        known: Decimal,
-        missing: usize,
-    },
+    Partial { known: Decimal, missing: usize },
 }
 
 impl PeriodTotal {
@@ -276,7 +273,10 @@ impl PeriodSummary {
 
     /// Receipts a human should look at before trusting the period figure.
     pub fn needing_attention(&self) -> usize {
-        self.receipts.iter().filter(|r| !r.problems.is_empty()).count()
+        self.receipts
+            .iter()
+            .filter(|r| !r.problems.is_empty())
+            .count()
     }
 }
 
@@ -464,7 +464,12 @@ mod tests {
         }
     }
 
-    fn receipt(subtotal: Option<&str>, tax: Option<&str>, total: Option<&str>, items: Vec<LineItem>) -> Receipt {
+    fn receipt(
+        subtotal: Option<&str>,
+        tax: Option<&str>,
+        total: Option<&str>,
+        items: Vec<LineItem>,
+    ) -> Receipt {
         Receipt {
             id: Uuid::nil(),
             purchased_on: jiff::civil::date(2026, 7, 1),
@@ -487,7 +492,13 @@ mod tests {
             Some("32.82"),
             Some("2.54"),
             Some("35.36"),
-            vec![item("11.72"), item("2.96"), item("3.98"), item("2.44"), item("11.72")],
+            vec![
+                item("11.72"),
+                item("2.96"),
+                item("3.98"),
+                item("2.44"),
+                item("11.72"),
+            ],
         );
         assert!(r.problems().is_empty(), "unexpected: {:?}", r.problems());
         assert!(!r.needs_total());
@@ -519,7 +530,12 @@ mod tests {
 
     #[test]
     fn subtotal_plus_tax_not_matching_the_total_is_a_problem() {
-        let r = receipt(Some("10.00"), Some("1.00"), Some("99.00"), vec![item("10.00")]);
+        let r = receipt(
+            Some("10.00"),
+            Some("1.00"),
+            Some("99.00"),
+            vec![item("10.00")],
+        );
         let p = r.problems();
         assert!(p.iter().any(|s| s.contains("off by -88")), "got {p:?}");
     }
@@ -528,7 +544,12 @@ mod tests {
     /// be called out explicitly — it would otherwise look like a free item.
     #[test]
     fn a_zero_amount_line_item_is_flagged() {
-        let r = receipt(Some("10.00"), None, Some("10.00"), vec![item("10.00"), item("0")]);
+        let r = receipt(
+            Some("10.00"),
+            None,
+            Some("10.00"),
+            vec![item("10.00"), item("0")],
+        );
         let p = r.problems();
         assert!(p.iter().any(|s| s.contains("no amount")), "got {p:?}");
     }
@@ -562,7 +583,13 @@ mod tests {
             Some("32.82"),
             Some("2.54"),
             Some("35.36"),
-            vec![item("11.72"), item("2.96"), item("3.98"), item("2.44"), item("11.72")],
+            vec![
+                item("11.72"),
+                item("2.96"),
+                item("3.98"),
+                item("2.44"),
+                item("11.72"),
+            ],
         );
         assert_eq!(r.line_item_sum(), dec("32.82"));
         assert!(r.problems().is_empty(), "got {:?}", r.problems());
@@ -573,17 +600,26 @@ mod tests {
         // Mid-month.
         assert_eq!(
             last_full_month(jiff::civil::date(2026, 8, 6)),
-            (jiff::civil::date(2026, 7, 1), jiff::civil::date(2026, 7, 31))
+            (
+                jiff::civil::date(2026, 7, 1),
+                jiff::civil::date(2026, 7, 31)
+            )
         );
         // On the 1st, "last month" is still the month before, not this one.
         assert_eq!(
             last_full_month(jiff::civil::date(2026, 8, 1)),
-            (jiff::civil::date(2026, 7, 1), jiff::civil::date(2026, 7, 31))
+            (
+                jiff::civil::date(2026, 7, 1),
+                jiff::civil::date(2026, 7, 31)
+            )
         );
         // Year rollover.
         assert_eq!(
             last_full_month(jiff::civil::date(2026, 1, 15)),
-            (jiff::civil::date(2025, 12, 1), jiff::civil::date(2025, 12, 31))
+            (
+                jiff::civil::date(2025, 12, 1),
+                jiff::civil::date(2025, 12, 31)
+            )
         );
         // February, leap and common, taking the end-of-month from the calendar
         // rather than a hardcoded length.
@@ -618,7 +654,11 @@ mod tests {
         )]);
         let lines: Vec<_> = csv.lines().collect();
         assert_eq!(lines.len(), 3, "header + 2 items: {csv}");
-        assert!(lines[1].contains(",35.36,"), "first row carries it: {}", lines[1]);
+        assert!(
+            lines[1].contains(",35.36,"),
+            "first row carries it: {}",
+            lines[1]
+        );
         assert!(
             lines[2].starts_with("2026-07-01,Walmart,,USD,Bread,3.50,"),
             "second row's total column is blank: {}",
@@ -633,7 +673,10 @@ mod tests {
         let csv = receipts_to_csv(&[full("Shell", Some("42.00"), vec![])]);
         let lines: Vec<_> = csv.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[1], "2026-07-01,Shell,42.00,USD,,,no,00000000-0000-0000-0000-000000000000");
+        assert_eq!(
+            lines[1],
+            "2026-07-01,Shell,42.00,USD,,,no,00000000-0000-0000-0000-000000000000"
+        );
     }
 
     #[test]

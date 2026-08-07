@@ -85,10 +85,7 @@ pub async fn receipt_status(id: Uuid) -> Result<dto::ExtractionStatus, ServerFnE
 
 /// Parses a human-typed amount, distinguishing "cleared" from "unparseable".
 #[cfg(feature = "ssr")]
-fn optional_money(
-    field: &str,
-    raw: &str,
-) -> Result<Option<rust_decimal::Decimal>, ServerFnError> {
+fn optional_money(field: &str, raw: &str) -> Result<Option<rust_decimal::Decimal>, ServerFnError> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Ok(None);

@@ -94,7 +94,10 @@ pub fn to_dto_receipt(receipt: &models::Receipt, items: &[models::LineItem]) -> 
     }
 }
 
-pub fn to_dto_summary(receipt: &models::Receipt, items: &[models::LineItem]) -> dto::ReceiptSummary {
+pub fn to_dto_summary(
+    receipt: &models::Receipt,
+    items: &[models::LineItem],
+) -> dto::ReceiptSummary {
     // Converts the items only to run the shared problem checks over them; they
     // are not sent, since the period list shows the conclusion, not the rows.
     let converted: Vec<_> = items.iter().map(to_dto_line_item).collect();
@@ -189,12 +192,20 @@ mod tests {
         assert_eq!(period.totals.len(), 1, "both receipts are USD");
         assert_eq!(period.totals[0].currency, "USD");
         assert_eq!(period.totals[0].total.known(), dec("32.00"));
-        assert_eq!(period.totals[0].total.missing(), 1, "the unreadable receipt");
+        assert_eq!(
+            period.totals[0].total.missing(),
+            1,
+            "the unreadable receipt"
+        );
         assert!(!period.totals[0].total.is_complete());
 
         // Costco balances (30 + 2 = 32, items = 30); the other is only missing a
         // total, so exactly one problem each way.
-        assert!(period.receipts[1].problems.is_empty(), "{:?}", period.receipts[1].problems);
+        assert!(
+            period.receipts[1].problems.is_empty(),
+            "{:?}",
+            period.receipts[1].problems
+        );
         assert_eq!(period.receipts[0].problems.len(), 1);
         assert_eq!(period.needing_attention(), 1);
     }

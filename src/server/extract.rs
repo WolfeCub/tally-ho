@@ -21,10 +21,10 @@ use rig_agent::agent::{Agent, OutputMode};
 // `.agent()` comes from AgentClientExt, which is blanket-implemented for every
 // CompletionClient; the prelude brings in both.
 use rig_agent::prelude::*;
+use rig_core::OneOrMany;
 use rig_core::client::Nothing;
 use rig_core::message::{ImageMediaType, Message, UserContent};
 use rig_core::providers::ollama;
-use rig_core::OneOrMany;
 use rust_decimal::Decimal;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
