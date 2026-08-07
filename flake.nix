@@ -71,8 +71,20 @@
 
         tally-ho = craneLib.buildPackage (common
           // {
-            # ssr, since that's nearly all the deps.
-            cargoArtifacts = craneLib.buildDepsOnly (common // {cargoExtraArgs = "--features ssr";});
+            # crane primes deps for one target; cargo leptos needs two. The
+            # client half is a separate target dir, triple and profile, so
+            # nothing crane caches applies to it and all ~190 of its deps
+            # rebuild every time. Flags must match what cargo leptos runs.
+            cargoArtifacts = craneLib.buildDepsOnly (common
+              // {
+                cargoExtraArgs = "--locked --features ssr";
+                postBuild = ''
+                  cargo build --locked --features hydrate --lib \
+                    --profile wasm-release \
+                    --target wasm32-unknown-unknown \
+                    --target-dir target/front
+                '';
+              });
 
             buildPhaseCargoCommand = "cargo leptos build --release";
             # Plain cargo test, not `cargo leptos test`. Means a build also fails if
