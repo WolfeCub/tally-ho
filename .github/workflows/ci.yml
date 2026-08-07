@@ -31,17 +31,15 @@ jobs:
         uses: nix-community/cache-nix-action@v7
         with:
           # Keyed on the lockfiles, so a source-only change still reuses the
-          # cached dependency build — nearly all of the ~700 crates.
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'Cargo.lock') }}
+          # cached dependency build — nearly all of the ~700 crates. This file is
+          # in there too: it decides what gets built, and a hit skips the save.
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'Cargo.lock', '.github/workflows/ci.yml') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-
           # 0 is "free whatever you can" — the action frees (store size - this).
-          # GC can't touch anything ./result reaches, so only dead paths go,
-          # mostly deps outputs orphaned by older flake.nix revisions.
+          # GC can't touch anything an out-link reaches, so only dead paths go.
           gc-max-store-size: 0
-          purge: true
-          purge-prefixes: nix-${{ runner.os }}-
-          purge-last-accessed: P7D
-          purge-primary-key: never
+          # Nothing to purge: we always restore the newest match, and GitHub drops
+          # caches untouched for 7 days or evicts oldest-accessed past 10GB.
 
       - name: Cache state
         run: |
