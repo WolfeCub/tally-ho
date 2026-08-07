@@ -53,7 +53,11 @@ jobs:
 
       # The derivation's check phase runs the test suite, so this covers both.
       - name: Build image
-        run: nix build .#image -L
+        run: |
+          nix build .#image -L
+          # The push tooling has no gc-root of its own, so GC drops skopeo before
+          # the save and every run rebuilds it from source. An out-link keeps it.
+          nix build .#image.copyTo -o "$RUNNER_TEMP/push-tools" -L
 
       # The size heading into the save. It is NOT the saved size: the GC and the
       # upload happen in cache-nix-action's post step, which runs after every step
