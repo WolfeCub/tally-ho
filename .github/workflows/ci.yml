@@ -41,11 +41,10 @@ jobs:
           # cached dependency build — nearly all of the ~700 crates.
           primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'Cargo.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-
-          # No gc-max-store-size on purpose: any number here would be a guess, and
-          # trimming to leave room for several entries only helps if we need
-          # several. A source-only change reuses this key, so usually one complete
-          # entry is the whole point. Set a limit if the sizes logged below get
-          # near GitHub's 10GB-per-repo cap.
+          # 0 is "free whatever you can" — the action frees (store size - this).
+          # GC can't touch anything ./result reaches, so only dead paths go,
+          # mostly deps outputs orphaned by older flake.nix revisions.
+          gc-max-store-size: 0
           purge: true
           purge-prefixes: nix-${{ runner.os }}-
           purge-last-accessed: P7D

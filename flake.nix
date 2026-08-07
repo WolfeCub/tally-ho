@@ -25,8 +25,9 @@
           overlays = [(import rust-overlay)];
         };
         # nixpkgs' rustc has no wasm32 target, which the client bundle needs.
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          extensions = ["rust-src" "rust-analyzer"];
+        # minimal, since default includes 880MB of HTML rust docs
+        rustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
+          extensions = ["rust-src" "rust-analyzer" "clippy" "rustfmt"];
           targets = ["wasm32-unknown-unknown"];
         };
 
