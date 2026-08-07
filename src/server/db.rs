@@ -50,10 +50,9 @@ pub async fn connect_raw_url(url: &str) -> toasty::Result<toasty::Db> {
     let max_pool_size = if url.contains(":memory:") { 1 } else { 16 };
 
     toasty::Db::builder()
-        // `crate::*` is the only supported whole-crate form; the macro has no
-        // arm for a module glob like `crate::models::*`. It discovers by
-        // CARGO_PKG_NAME rather than module path, so models in `crate::models`
-        // are picked up regardless.
+        // `crate::*` is the only whole-crate form the macro takes — there's no
+        // arm for a module glob like `server::models::*`. It finds models by
+        // CARGO_PKG_NAME rather than module path, so wherever they live is fine.
         .models(toasty::models!(crate::*))
         .max_pool_size(max_pool_size)
         .connect(url)
@@ -113,7 +112,7 @@ async fn apply_migrations(db: &toasty::Db) -> anyhow::Result<()> {
     // `apply` reports "no migrations found" and succeeds when the history file
     // is missing, which would otherwise leave an empty database to fail on its
     // first query.
-    crate::models::Receipt::all()
+    crate::server::models::Receipt::all()
         .first()
         .exec(&mut db.clone())
         .await
@@ -130,7 +129,7 @@ async fn apply_migrations(db: &toasty::Db) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{ExtractionStatus, Receipt};
+    use crate::server::models::{ExtractionStatus, Receipt};
     use rust_decimal::Decimal;
     use std::str::FromStr;
 

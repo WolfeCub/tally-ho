@@ -3,7 +3,7 @@
 //! Server-only by design: `#[derive(toasty::Model)]` pulls in toasty and the
 //! SQLite driver, neither of which belongs in a wasm bundle downloaded by a
 //! phone. The types the UI actually sees are the plain serde structs in
-//! [`crate::dto`].
+//! [`crate::shared::dto`].
 
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -32,7 +32,7 @@ pub struct Receipt {
     /// it. Defaulting to `0` here would let an unreadable receipt silently
     /// under-report a statement period, which is the exact failure this app
     /// exists to prevent. The real-world invariant is enforced at review time,
-    /// not by the column type. See [`crate::dto::PeriodTotal`].
+    /// not by the column type. See [`crate::shared::dto::PeriodTotal`].
     pub total: Option<Decimal>,
     pub currency: String,
 

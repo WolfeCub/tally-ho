@@ -10,7 +10,7 @@ async fn receipt_image(
 ) -> axum::response::Response {
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
-    use tally_ho::models::Receipt;
+    use tally_ho::server::models::Receipt;
 
     let mut db = state.db.clone();
 
@@ -79,12 +79,12 @@ async fn export_csv(
     }
 
     let (from, to) = match (parse(params.from), parse(params.to)) {
-        (Ok(from), Ok(to)) => tally_ho::server::resolve_range(from, to),
+        (Ok(from), Ok(to)) => tally_ho::server::query::resolve_range(from, to),
         (Err(e), _) | (_, Err(e)) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
 
     let mut db = state.db.clone();
-    let rows = match tally_ho::server::load_range(&mut db, from, to).await {
+    let rows = match tally_ho::server::query::load_range(&mut db, from, to).await {
         Ok(rows) => rows,
         Err(e) => {
             return (
@@ -97,9 +97,9 @@ async fn export_csv(
 
     let receipts: Vec<_> = rows
         .iter()
-        .map(|(r, items)| tally_ho::server::to_dto_receipt(r, items))
+        .map(|(r, items)| tally_ho::server::mappers::to_dto_receipt(r, items))
         .collect();
-    let csv = tally_ho::dto::receipts_to_csv(&receipts);
+    let csv = tally_ho::shared::dto::receipts_to_csv(&receipts);
 
     (
         [
@@ -125,7 +125,7 @@ async fn main() {
     use leptos::logging::log;
     use leptos::prelude::*;
     use leptos_axum::{LeptosRoutes, generate_route_list};
-    use tally_ho::app::*;
+    use tally_ho::frontend::*;
     use tally_ho::server::state::AppState;
 
     tracing_subscriber::fmt()

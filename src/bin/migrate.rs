@@ -1,6 +1,6 @@
 //! Schema management: `cargo run --features ssr --bin migrate -- migration <cmd>`.
 //!
-//! Generation has to live in a binary that links `crate::models`, since it works
+//! Generation has to live in a binary that links `crate::server::models`, since it works
 //! by diffing those models against the newest snapshot. After changing a model:
 //!
 //! ```text
@@ -24,8 +24,8 @@ async fn main() -> anyhow::Result<()> {
 
     // `connect_raw`, not `connect`: this binary manages the schema, so it must
     // not trigger the startup migration on the way in.
-    let db = tally_ho::db::connect_raw().await?;
-    toasty_cli::ToastyCli::with_config(db, tally_ho::db::migration_config())
+    let db = tally_ho::server::db::connect_raw().await?;
+    toasty_cli::ToastyCli::with_config(db, tally_ho::server::db::migration_config())
         .parse_and_run()
         .await
 }

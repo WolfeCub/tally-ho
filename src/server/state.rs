@@ -28,7 +28,7 @@ impl AppState {
         );
 
         Ok(Self {
-            db: crate::db::connect().await?,
+            db: crate::server::db::connect().await?,
             extractor: Arc::new(OllamaExtractor::new(config)?),
             store: Arc::new(Store::from_env()),
         })

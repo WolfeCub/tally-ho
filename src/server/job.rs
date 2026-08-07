@@ -7,7 +7,7 @@
 
 use uuid::Uuid;
 
-use crate::models::{ExtractionStatus, Receipt};
+use crate::server::models::{ExtractionStatus, Receipt};
 
 use super::state::AppState;
 

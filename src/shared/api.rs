@@ -1,14 +1,13 @@
 //! Server functions.
 //!
-//! This module is compiled for **both** targets — `#[server]` generates a
-//! network call on the client and the real body on the server — so every
-//! server-only import lives inside a function body, not at module scope.
+//! This file builds for wasm too, so every server-only import has to sit inside
+//! a function body rather than at module scope.
 
 use leptos::prelude::*;
 use leptos::server_fn::codec::{MultipartData, MultipartFormData};
 use uuid::Uuid;
 
-use crate::dto;
+use crate::shared::dto;
 
 /// Stores an uploaded photo, creates the receipt row, and kicks off extraction.
 ///
@@ -16,7 +15,7 @@ use crate::dto;
 /// caller should poll [`receipt_status`].
 #[server(input = MultipartFormData)]
 pub async fn upload_receipt(data: MultipartData) -> Result<Uuid, ServerFnError> {
-    use crate::models::Receipt;
+    use crate::server::models::Receipt;
     use crate::server::{job, state::AppState};
 
     let state = expect_context::<AppState>();
@@ -70,7 +69,7 @@ pub async fn upload_receipt(data: MultipartData) -> Result<Uuid, ServerFnError> 
 /// Poll target while extraction runs.
 #[server]
 pub async fn receipt_status(id: Uuid) -> Result<dto::ExtractionStatus, ServerFnError> {
-    use crate::models::Receipt;
+    use crate::server::models::Receipt;
     use crate::server::state::AppState;
 
     let state = expect_context::<AppState>();
@@ -80,7 +79,7 @@ pub async fn receipt_status(id: Uuid) -> Result<dto::ExtractionStatus, ServerFnE
         .await
         .map_err(|e| ServerFnError::new(format!("no such receipt: {e}")))?;
 
-    Ok(crate::server::to_dto_status(&receipt.status))
+    Ok(crate::server::mappers::to_dto_status(&receipt.status))
 }
 
 /// Parses a human-typed amount, distinguishing "cleared" from "unparseable".
@@ -98,7 +97,7 @@ fn optional_money(field: &str, raw: &str) -> Result<Option<rust_decimal::Decimal
 /// Applies human corrections to a receipt's own fields.
 #[server]
 pub async fn update_receipt_meta(edit: dto::ReceiptEdit) -> Result<dto::Receipt, ServerFnError> {
-    use crate::models::Receipt;
+    use crate::server::models::Receipt;
     use crate::server::state::AppState;
 
     let state = expect_context::<AppState>();
@@ -140,7 +139,7 @@ pub async fn update_receipt_meta(edit: dto::ReceiptEdit) -> Result<dto::Receipt,
 
 #[server]
 pub async fn update_line_item(edit: dto::LineItemEdit) -> Result<dto::Receipt, ServerFnError> {
-    use crate::models::LineItem;
+    use crate::server::models::LineItem;
     use crate::server::state::AppState;
 
     let state = expect_context::<AppState>();
@@ -177,7 +176,7 @@ pub async fn add_line_item(
     description: String,
     total: String,
 ) -> Result<dto::Receipt, ServerFnError> {
-    use crate::models::{LineItem, Receipt};
+    use crate::server::models::{LineItem, Receipt};
     use crate::server::state::AppState;
 
     let state = expect_context::<AppState>();
@@ -216,7 +215,7 @@ pub async fn add_line_item(
 
 #[server]
 pub async fn delete_line_item(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
-    use crate::models::LineItem;
+    use crate::server::models::LineItem;
     use crate::server::state::AppState;
 
     let state = expect_context::<AppState>();
@@ -242,7 +241,7 @@ pub async fn delete_line_item(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
 /// under-report.
 #[server]
 pub async fn mark_reviewed(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
-    use crate::models::Receipt;
+    use crate::server::models::Receipt;
     use crate::server::state::AppState;
 
     let state = expect_context::<AppState>();
@@ -272,7 +271,7 @@ pub async fn mark_reviewed(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
 /// so the client never has to guess what the server did.
 #[cfg(feature = "ssr")]
 async fn load_receipt(db: &mut toasty::Db, id: Uuid) -> Result<dto::Receipt, ServerFnError> {
-    use crate::models::Receipt;
+    use crate::server::models::Receipt;
 
     let receipt = Receipt::get_by_id(db, &id)
         .await
@@ -282,7 +281,7 @@ async fn load_receipt(db: &mut toasty::Db, id: Uuid) -> Result<dto::Receipt, Ser
         .exec(db)
         .await
         .map_err(|e| ServerFnError::new(format!("could not load line items: {e}")))?;
-    Ok(crate::server::to_dto_receipt(&receipt, &items))
+    Ok(crate::server::mappers::to_dto_receipt(&receipt, &items))
 }
 
 /// The reconciliation view: every receipt in a statement period, with a total.
@@ -301,14 +300,14 @@ pub async fn receipts_in_range(
     let state = expect_context::<AppState>();
     let mut db = state.db.clone();
 
-    let (from, to) = crate::server::resolve_range(from, to);
-    let rows = crate::server::load_range(&mut db, from, to)
+    let (from, to) = crate::server::query::resolve_range(from, to);
+    let rows = crate::server::query::load_range(&mut db, from, to)
         .await
         .map_err(|e| ServerFnError::new(format!("could not load the period: {e}")))?;
 
     let summaries = rows
         .iter()
-        .map(|(r, items)| crate::server::to_dto_summary(r, items))
+        .map(|(r, items)| crate::server::mappers::to_dto_summary(r, items))
         .collect();
 
     Ok(dto::PeriodSummary::new(from, to, summaries))
@@ -317,7 +316,7 @@ pub async fn receipts_in_range(
 /// Reverse-chronological receipts, newest first, for the list tab.
 #[server]
 pub async fn recent_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, ServerFnError> {
-    use crate::models::Receipt;
+    use crate::server::models::Receipt;
     use crate::server::state::AppState;
 
     let state = expect_context::<AppState>();
@@ -337,7 +336,7 @@ pub async fn recent_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, S
             .exec(&mut db)
             .await
             .map_err(|e| ServerFnError::new(format!("could not load line items: {e}")))?;
-        out.push(crate::server::to_dto_summary(&receipt, &items));
+        out.push(crate::server::mappers::to_dto_summary(&receipt, &items));
     }
     Ok(out)
 }
@@ -345,7 +344,7 @@ pub async fn recent_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, S
 /// Full receipt with line items, for the review screen.
 #[server]
 pub async fn get_receipt(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
-    use crate::models::Receipt;
+    use crate::server::models::Receipt;
     use crate::server::state::AppState;
 
     let state = expect_context::<AppState>();
@@ -360,5 +359,5 @@ pub async fn get_receipt(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
         .await
         .map_err(|e| ServerFnError::new(format!("could not load line items: {e}")))?;
 
-    Ok(crate::server::to_dto_receipt(&receipt, &items))
+    Ok(crate::server::mappers::to_dto_receipt(&receipt, &items))
 }
