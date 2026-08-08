@@ -11,6 +11,7 @@
   };
 
   outputs = {
+    self,
     nixpkgs,
     utils,
     rust-overlay,
@@ -116,6 +117,10 @@
             meta.mainProgram = "tally-ho";
           });
 
+        # Nothing references the flake inputs once evaluation is done, so the GC
+        # takes them and the next CI run re-fetches nixpkgs. CI roots this.
+        flake-inputs = pkgs.linkFarm "flake-inputs" self.inputs;
+
         # Output is a JSON manifest, not a tarball, so `docker load` won't read it.
         # Use `nix run .#image.copyToDockerDaemon`.
         image = nix2container.packages.${system}.nix2container.buildImage {
@@ -150,7 +155,7 @@
       in {
         packages = {
           default = image;
-          inherit image tally-ho;
+          inherit image tally-ho flake-inputs;
         };
 
         devShells.default = pkgs.mkShell {
