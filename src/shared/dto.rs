@@ -50,13 +50,14 @@ pub struct Receipt {
     pub line_items: Vec<LineItem>,
 }
 
-/// Human edits to a receipt's own fields.
+/// A whole receipt as the review screen left it — the header fields plus the
+/// complete line-item list, saved in one go.
 ///
 /// Money and dates travel as strings, exactly as typed, and the server parses them
 /// with the same routines the extractor uses — so "$12.34" and "8/12/21" work, and
 /// there's one parser rather than two. An empty string clears an optional field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReceiptEdit {
+pub struct ReceiptSave {
     pub id: Uuid,
     pub merchant: String,
     pub purchased_on: String,
@@ -64,11 +65,15 @@ pub struct ReceiptEdit {
     pub subtotal: String,
     pub tax: String,
     pub total: String,
+    /// Every item the receipt should end up with, in order. Anything missing
+    /// from here was deleted on screen.
+    pub items: Vec<LineItemSave>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LineItemEdit {
-    pub id: Uuid,
+pub struct LineItemSave {
+    /// `None` for a row added on the review screen and not yet written.
+    pub id: Option<Uuid>,
     pub description: String,
     pub total: String,
 }

@@ -8,7 +8,7 @@ mod photo;
 mod receipt_rows;
 mod steps;
 
-pub use form::{LabeledInput, field, form_element, reset_form};
+pub use form::{LabeledInput, field, form_element};
 pub use icons::{CameraIcon, Spinner, Verdict};
 pub use notice::{Notice, Tone};
 pub use photo::ReceiptPhoto;
@@ -19,5 +19,7 @@ pub use steps::StepBar;
 /// Anything extra goes on the end: `format!("{INPUT} flex-1")`.
 pub const INPUT: &str = "rounded-lg border border-edge bg-ink p-2";
 pub const BUTTON: &str = "rounded-lg border border-edge bg-surface active:bg-edge";
+/// The one thing a screen is really for. Everything else is a [`BUTTON`].
+pub const PRIMARY: &str = "rounded-lg bg-paper font-medium text-ink active:opacity-80";
 /// Big enough to hit with a thumb without aiming.
 pub const TAP: &str = "min-h-11 px-4 py-3";

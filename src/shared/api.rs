@@ -94,144 +94,63 @@ fn optional_money(field: &str, raw: &str) -> Result<Option<rust_decimal::Decimal
         .ok_or_else(|| ServerFnError::new(format!("could not read {field} {raw:?} as an amount")))
 }
 
-/// Applies human corrections to a receipt's own fields.
+/// Applies the review screen's corrections — the receipt's own fields and the
+/// line items as the human left them.
 #[server]
-pub async fn update_receipt_meta(edit: dto::ReceiptEdit) -> Result<dto::Receipt, ServerFnError> {
-    use crate::server::models::Receipt;
+pub async fn save_receipt(save: dto::ReceiptSave) -> Result<dto::Receipt, ServerFnError> {
     use crate::server::state::AppState;
 
     let state = expect_context::<AppState>();
     let mut db = state.db.clone();
 
-    // Parsed before anything is written, so a typo in one field cannot leave the
-    // receipt half-updated.
-    let purchased_on = crate::server::extract::parse_date(&edit.purchased_on).ok_or_else(|| {
+    let id = save.id;
+    let parsed = parse_save(save)?;
+
+    crate::server::query::save_receipt(&mut db, id, parsed)
+        .await
+        .map_err(|e| ServerFnError::new(format!("could not save receipt: {e}")))?;
+
+    load_receipt(&mut db, id).await
+}
+
+/// Checks everything the human typed before a single row is written.
+#[cfg(feature = "ssr")]
+fn parse_save(save: dto::ReceiptSave) -> Result<crate::server::query::ReceiptSave, ServerFnError> {
+    use crate::server::query::{ItemSave, ReceiptSave};
+
+    let purchased_on = crate::server::extract::parse_date(&save.purchased_on).ok_or_else(|| {
         ServerFnError::new(format!(
             "could not read {:?} as a date — try YYYY-MM-DD or MM/DD/YY",
-            edit.purchased_on
+            save.purchased_on
         ))
     })?;
-    let subtotal = optional_money("the subtotal", &edit.subtotal)?;
-    let tax = optional_money("the tax", &edit.tax)?;
-    let total = optional_money("the total", &edit.total)?;
 
-    let merchant = edit.merchant.trim().to_string();
-    let currency = edit.currency.trim().to_uppercase();
-
-    let mut receipt = Receipt::get_by_id(&mut db, &edit.id)
-        .await
-        .map_err(|e| ServerFnError::new(format!("no such receipt: {e}")))?;
-
-    toasty::update!(receipt {
-        merchant: merchant,
-        purchased_on: purchased_on,
-        currency: currency,
-        subtotal: subtotal,
-        tax: tax,
-        total: total,
-    })
-    .exec(&mut db)
-    .await
-    .map_err(|e| ServerFnError::new(format!("could not save receipt: {e}")))?;
-
-    load_receipt(&mut db, edit.id).await
-}
-
-#[server]
-pub async fn update_line_item(edit: dto::LineItemEdit) -> Result<dto::Receipt, ServerFnError> {
-    use crate::server::models::LineItem;
-    use crate::server::state::AppState;
-
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
-
-    let total = optional_money("the amount", &edit.total)?.unwrap_or_default();
-    let description = edit.description.trim().to_string();
-    if description.is_empty() {
-        return Err(ServerFnError::new("a line item needs a description"));
+    let mut items = Vec::with_capacity(save.items.len());
+    for item in save.items {
+        let description = item.description.trim().to_string();
+        // A row added and then left alone is dropped rather than complained about.
+        if description.is_empty() && item.total.trim().is_empty() {
+            continue;
+        }
+        if description.is_empty() {
+            return Err(ServerFnError::new("a line item needs a description"));
+        }
+        items.push(ItemSave {
+            id: item.id,
+            description,
+            total: optional_money("the amount", &item.total)?.unwrap_or_default(),
+        });
     }
 
-    let mut item = LineItem::get_by_id(&mut db, &edit.id)
-        .await
-        .map_err(|e| ServerFnError::new(format!("no such line item: {e}")))?;
-    let receipt_id = item.receipt_id;
-
-    toasty::update!(item {
-        description: description,
-        total: total,
-        // Marks this row as human-checked, so a later re-extraction can know
-        // not to clobber it.
-        edited: true,
+    Ok(ReceiptSave {
+        merchant: save.merchant.trim().to_string(),
+        purchased_on,
+        currency: save.currency.trim().to_uppercase(),
+        subtotal: optional_money("the subtotal", &save.subtotal)?,
+        tax: optional_money("the tax", &save.tax)?,
+        total: optional_money("the total", &save.total)?,
+        items,
     })
-    .exec(&mut db)
-    .await
-    .map_err(|e| ServerFnError::new(format!("could not save line item: {e}")))?;
-
-    load_receipt(&mut db, receipt_id).await
-}
-
-#[server]
-pub async fn add_line_item(
-    receipt_id: Uuid,
-    description: String,
-    total: String,
-) -> Result<dto::Receipt, ServerFnError> {
-    use crate::server::models::{LineItem, Receipt};
-    use crate::server::state::AppState;
-
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
-
-    let amount = optional_money("the amount", &total)?.unwrap_or_default();
-    let description = description.trim().to_string();
-    if description.is_empty() {
-        return Err(ServerFnError::new("a line item needs a description"));
-    }
-
-    let receipt = Receipt::get_by_id(&mut db, &receipt_id)
-        .await
-        .map_err(|e| ServerFnError::new(format!("no such receipt: {e}")))?;
-    let existing = receipt
-        .line_items()
-        .exec(&mut db)
-        .await
-        .map_err(|e| ServerFnError::new(format!("could not load line items: {e}")))?;
-    // Append after whatever is already there, including rows a human added.
-    let next = existing.iter().map(|i| i.position).max().unwrap_or(-1) + 1;
-
-    toasty::create!(LineItem {
-        receipt_id: receipt_id,
-        description: description,
-        total: amount,
-        position: next,
-        edited: true,
-    })
-    .exec(&mut db)
-    .await
-    .map_err(|e| ServerFnError::new(format!("could not add line item: {e}")))?;
-
-    load_receipt(&mut db, receipt_id).await
-}
-
-#[server]
-pub async fn delete_line_item(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
-    use crate::server::models::LineItem;
-    use crate::server::state::AppState;
-
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
-
-    let item = LineItem::get_by_id(&mut db, &id)
-        .await
-        .map_err(|e| ServerFnError::new(format!("no such line item: {e}")))?;
-    let receipt_id = item.receipt_id;
-
-    item.delete()
-        .exec(&mut db)
-        .await
-        .map_err(|e| ServerFnError::new(format!("could not delete line item: {e}")))?;
-
-    load_receipt(&mut db, receipt_id).await
 }
 
 /// Throws away a receipt, its line items and its photo.

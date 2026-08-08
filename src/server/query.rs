@@ -48,6 +48,100 @@ pub async fn load_range(
     Ok(out)
 }
 
+/// A review-screen save, with every field already parsed.
+///
+/// Parsing happens before this is built so a typo in one box can't leave the
+/// receipt half-written.
+pub struct ReceiptSave {
+    pub merchant: String,
+    pub purchased_on: jiff::civil::Date,
+    pub currency: String,
+    pub subtotal: Option<rust_decimal::Decimal>,
+    pub tax: Option<rust_decimal::Decimal>,
+    pub total: Option<rust_decimal::Decimal>,
+    /// The items the receipt should end up with, in screen order.
+    pub items: Vec<ItemSave>,
+}
+
+pub struct ItemSave {
+    /// `None` for a row the human added.
+    pub id: Option<uuid::Uuid>,
+    pub description: String,
+    pub total: rust_decimal::Decimal,
+}
+
+/// Writes the review screen in one go: the header fields, plus the line items as
+/// a complete replacement for whatever is stored.
+///
+/// One transaction — items dropped without the total that justified them reads
+/// as a genuine receipt, and nothing would flag it.
+pub async fn save_receipt(
+    db: &mut toasty::Db,
+    id: uuid::Uuid,
+    save: ReceiptSave,
+) -> toasty::Result<()> {
+    let mut tx = db.transaction().await?;
+
+    let mut receipt = models::Receipt::get_by_id(&mut tx, &id).await?;
+    let mut existing: std::collections::HashMap<_, _> = receipt
+        .line_items()
+        .exec(&mut tx)
+        .await?
+        .into_iter()
+        .map(|item| (item.id, item))
+        .collect();
+
+    toasty::update!(receipt {
+        merchant: save.merchant,
+        purchased_on: save.purchased_on,
+        currency: save.currency,
+        subtotal: save.subtotal,
+        tax: save.tax,
+        total: save.total,
+    })
+    .exec(&mut tx)
+    .await?;
+
+    for (position, item) in save.items.into_iter().enumerate() {
+        let position = position as i64;
+        // Removing as we go, so what's left over at the end is what the human
+        // deleted. An id that isn't there any more falls through to a create.
+        match item.id.and_then(|id| existing.remove(&id)) {
+            Some(mut row) => {
+                // `edited` marks a row a human actually changed, so a later
+                // re-extraction knows not to clobber it.
+                let edited =
+                    row.edited || row.description != item.description || row.total != item.total;
+                toasty::update!(row {
+                    description: item.description,
+                    total: item.total,
+                    position: position,
+                    edited: edited,
+                })
+                .exec(&mut tx)
+                .await?;
+            }
+            None => {
+                toasty::create!(models::LineItem {
+                    receipt_id: id,
+                    description: item.description,
+                    total: item.total,
+                    position: position,
+                    edited: true,
+                })
+                .exec(&mut tx)
+                .await?;
+            }
+        }
+    }
+
+    for row in existing.into_values() {
+        row.delete().exec(&mut tx).await?;
+    }
+
+    tx.commit().await
+}
+
 /// Deletes a receipt and its line items, handing back the image path so the
 /// caller can remove the photo once the rows are actually gone.
 ///
@@ -230,6 +324,101 @@ mod tests {
         assert_eq!(survivors.len(), 1);
         assert_eq!(survivors[0].0.merchant, "Keeper");
         assert_eq!(survivors[0].1.len(), 1);
+    }
+
+    /// One save has to update, add and delete line items at once — the review
+    /// screen sends the list it ended up with, not a diff.
+    #[tokio::test]
+    async fn saving_a_receipt_replaces_its_line_items() {
+        use crate::server::models::LineItem;
+
+        let mut db = crate::server::db::connect_url("sqlite::memory:")
+            .await
+            .unwrap();
+
+        let receipt = toasty::create!(Receipt {
+            purchased_on: jiff::civil::date(2026, 7, 20),
+            merchant: "Cotsco",
+            total: dec("32.00"),
+            currency: "usd",
+            image_path: "a.jpg",
+            line_items: [
+                { description: "Milk", total: dec("10.00"), position: 0 },
+                { description: "Eggs", total: dec("20.00"), position: 1 },
+                { description: "Misread", total: dec("99.00"), position: 2 },
+            ],
+        })
+        .exec(&mut db)
+        .await
+        .unwrap();
+
+        let before = receipt.line_items().exec(&mut db).await.unwrap();
+        let milk = before.iter().find(|i| i.description == "Milk").unwrap();
+        let eggs = before.iter().find(|i| i.description == "Eggs").unwrap();
+
+        super::save_receipt(
+            &mut db,
+            receipt.id,
+            super::ReceiptSave {
+                merchant: "Costco".into(),
+                purchased_on: jiff::civil::date(2026, 7, 21),
+                currency: "USD".into(),
+                subtotal: Some(dec("30.00")),
+                tax: Some(dec("2.50")),
+                total: Some(dec("32.50")),
+                items: vec![
+                    // Untouched.
+                    super::ItemSave {
+                        id: Some(milk.id),
+                        description: "Milk".into(),
+                        total: dec("10.00"),
+                    },
+                    // Corrected.
+                    super::ItemSave {
+                        id: Some(eggs.id),
+                        description: "Eggs".into(),
+                        total: dec("12.00"),
+                    },
+                    // Added on screen. "Misread" is absent, so it goes.
+                    super::ItemSave {
+                        id: None,
+                        description: "Bread".into(),
+                        total: dec("8.00"),
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        let receipt = Receipt::get_by_id(&mut db, &receipt.id).await.unwrap();
+        assert_eq!(receipt.merchant, "Costco");
+        assert_eq!(receipt.purchased_on, jiff::civil::date(2026, 7, 21));
+        assert_eq!(receipt.total, Some(dec("32.50")));
+
+        let mut items = receipt.line_items().exec(&mut db).await.unwrap();
+        items.sort_by_key(|i| i.position);
+        let got: Vec<_> = items
+            .iter()
+            .map(|i| (i.description.as_str(), i.total, i.edited))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Milk", dec("10.00"), false),
+                ("Eggs", dec("12.00"), true),
+                ("Bread", dec("8.00"), true),
+            ],
+            "only the rows a human changed are marked edited"
+        );
+
+        // Dropping a row has to take it out of the table, not just the screen —
+        // anything loading items directly would still count an orphan.
+        let all = LineItem::filter(LineItem::fields().receipt_id().eq(receipt.id))
+            .exec(&mut db)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 3, "the misread row is gone");
     }
 
     /// The CSV must describe the same period the view does.

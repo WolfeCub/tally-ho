@@ -14,12 +14,16 @@ pub fn LabeledInput(
     label: &'static str,
     name: &'static str,
     value: String,
+    /// `date` gets the platform picker; the rest are text.
+    #[prop(default = "text")]
+    kind: &'static str,
     #[prop(optional)] numeric: bool,
 ) -> impl IntoView {
     view! {
         <label class="flex flex-col gap-1">
             <span class="text-sm text-muted">{label}</span>
             <input
+                type=kind
                 name=name
                 value=value
                 // Brings up the numeric keypad on a phone instead of the
@@ -45,8 +49,4 @@ pub fn field(form: &HtmlFormElement, name: &str) -> String {
         .ok()
         .and_then(|d| d.get(name).as_string())
         .unwrap_or_default()
-}
-
-pub fn reset_form(form: &HtmlFormElement) {
-    form.reset();
 }
