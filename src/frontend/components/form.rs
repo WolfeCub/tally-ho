@@ -1,25 +1,13 @@
-//! Small pieces more than one screen uses, plus the form plumbing.
+//! Labelled inputs and the plumbing that reads them back.
 //!
-//! Every form here is an uncontrolled `<form>` read on submit rather than a
-//! signal per input — the server returns the whole receipt after each save, so
-//! there's nothing worth keeping in sync between keystrokes.
+//! Every form here is uncontrolled — read on submit rather than a signal per
+//! input. The server returns the whole receipt after each save, so there's
+//! nothing worth keeping in sync between keystrokes.
 
 use leptos::prelude::*;
 use leptos::web_sys::{FormData, HtmlFormElement, SubmitEvent};
 
-/// A spinner and a label, so a slow stage doesn't read as a frozen page.
-#[component]
-pub fn Working(#[prop(into)] label: String) -> impl IntoView {
-    view! {
-        <p class="flex items-center gap-3 text-muted">
-            <span
-                class="inline-block size-4 shrink-0 animate-spin rounded-full border-2 border-edge border-t-paper"
-                aria-hidden="true"
-            ></span>
-            {label}
-        </p>
-    }
-}
+use super::INPUT;
 
 #[component]
 pub fn LabeledInput(
@@ -37,7 +25,7 @@ pub fn LabeledInput(
                 // Brings up the numeric keypad on a phone instead of the
                 // full keyboard.
                 inputmode=numeric.then_some("decimal")
-                class="rounded-lg border border-edge bg-ink p-2"
+                class=INPUT
             />
         </label>
     }

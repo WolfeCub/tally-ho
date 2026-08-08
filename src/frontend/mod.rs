@@ -5,12 +5,12 @@
 //! bits more than one of them needs.
 
 mod capture;
+mod components;
 mod money;
 mod period;
-mod photo;
 mod receipts;
 mod review;
-mod ui;
+mod text;
 
 use leptos::prelude::*;
 use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};

@@ -4,8 +4,9 @@ use jiff::civil::Date;
 use leptos::prelude::*;
 use leptos::web_sys::SubmitEvent;
 
+use crate::frontend::components::{BUTTON, INPUT, ReceiptRows, TAP};
 use crate::frontend::money::money_total;
-use crate::frontend::receipts::ReceiptRows;
+use crate::frontend::text::plural;
 use crate::shared::api::receipts_in_range;
 use crate::shared::dto::PeriodSummary;
 
@@ -50,7 +51,7 @@ pub fn PeriodPage() -> impl IntoView {
         range.set((parse(shown_from()), parse(shown_to())));
     };
 
-    let date_input = "min-h-11 flex-1 rounded-lg border border-edge bg-ink p-2 sm:flex-none";
+    let date_input = format!("{INPUT} min-h-11 flex-1 sm:flex-none");
 
     view! {
         <h1 class="mb-4 text-xl font-semibold">"Period"</h1>
@@ -63,7 +64,7 @@ pub fn PeriodPage() -> impl IntoView {
                 // the live DOM in step once hydrated.
                 <input
                     type="date"
-                    class=date_input
+                    class=date_input.clone()
                     value=shown_from
                     prop:value=shown_from
                     on:input:target=move |ev| from_str.set(ev.target().value())
@@ -77,7 +78,7 @@ pub fn PeriodPage() -> impl IntoView {
                     on:input:target=move |ev| to_str.set(ev.target().value())
                 />
             </div>
-            <button type="submit" class="min-h-11 rounded-lg border border-edge bg-surface px-4">
+            <button type="submit" class=format!("{BUTTON} {TAP}")>
                 "Show period"
             </button>
         </form>
@@ -144,7 +145,7 @@ fn PeriodBody(summary: PeriodSummary) -> impl IntoView {
                     }}
 
                     <p class="text-sm text-muted">
-                        {format!("{count} receipt{}", if count == 1 { "" } else { "s" })}
+                        {plural(count, "receipt")}
                     </p>
                 </div>
                 // `download` is required: leptos_router intercepts same-origin
@@ -153,7 +154,9 @@ fn PeriodBody(summary: PeriodSummary) -> impl IntoView {
                 <a
                     href=export
                     download
-                    class="mt-3 flex min-h-11 items-center justify-center rounded-lg border border-edge px-4 no-underline sm:mt-0"
+                    class=format!(
+                        "{BUTTON} {TAP} mt-3 flex items-center justify-center no-underline sm:mt-0",
+                    )
                 >
                     "Export CSV"
                 </a>
@@ -167,8 +170,8 @@ fn PeriodBody(summary: PeriodSummary) -> impl IntoView {
                         view! {
                             <p class="mt-2 rounded-lg border border-danger p-2 text-sm text-danger">
                                 {format!(
-                                    "This is a floor, not the total: {missing} receipt{} ha{} no amount yet.",
-                                    if missing == 1 { "" } else { "s" },
+                                    "This is a floor, not the total: {} ha{} no amount yet.",
+                                    plural(missing, "receipt"),
                                     if missing == 1 { "s" } else { "ve" },
                                 )}
                             </p>
@@ -182,8 +185,8 @@ fn PeriodBody(summary: PeriodSummary) -> impl IntoView {
                 view! {
                     <p class="mb-4 text-sm text-muted">
                         {format!(
-                            "{attention} receipt{} need{} checking — marked below.",
-                            if attention == 1 { "" } else { "s" },
+                            "{} need{} checking — marked below.",
+                            plural(attention, "receipt"),
                             if attention == 1 { "s" } else { "" },
                         )}
                     </p>

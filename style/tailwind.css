@@ -11,6 +11,9 @@
   --color-edge: #32373a;
   --color-muted: #9aa0a6;
   --color-paper: #e8e6e3;
+  /* Lighter than a print red — a saturated one vibrates against the dark ink. */
+  --color-danger: #f2796b;
+  --color-good: #7fd1a3;
 }
 
 @layer base {

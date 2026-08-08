@@ -1,23 +1,71 @@
 //! Photograph a receipt, upload it, and wait for the model to read it.
 
 use leptos::prelude::*;
-use leptos::wasm_bindgen::JsCast;
-use leptos::web_sys::{FormData, HtmlFormElement, SubmitEvent};
+use leptos::web_sys::{FormData, SubmitEvent};
 
-use crate::frontend::ui::Working;
+use crate::frontend::components::{
+    BUTTON, CameraIcon, Spinner, StepBar, TAP, Verdict, form_element,
+};
 use crate::shared::api::{receipt_status, upload_receipt};
 use crate::shared::dto::ExtractionStatus;
+
+/// How far the upload has got, or `None` before there is one. Derived in one
+/// place so the card, the progress bar and the button can't disagree.
+#[derive(Clone, Copy, PartialEq)]
+enum Stage {
+    Sending,
+    Queued,
+    Reading,
+    Done,
+    Failed,
+}
+
+impl Stage {
+    fn working(self) -> bool {
+        matches!(self, Self::Sending | Self::Queued | Self::Reading)
+    }
+
+    /// Segments lit on the progress bar, out of three.
+    fn reached(self) -> usize {
+        match self {
+            Self::Sending => 1,
+            Self::Queued | Self::Reading => 2,
+            Self::Done | Self::Failed => 3,
+        }
+    }
+
+    fn heading(self) -> &'static str {
+        match self {
+            Self::Sending => "Sending the photo",
+            Self::Queued => "Waiting for the model",
+            Self::Reading => "Reading the receipt",
+            Self::Done => "Read it",
+            Self::Failed => "Could not read it",
+        }
+    }
+
+    fn detail(self) -> &'static str {
+        match self {
+            Self::Sending => "Uploading from your phone.",
+            Self::Queued => "Queued behind the other photos.",
+            Self::Reading => "Usually about ten seconds.",
+            Self::Done => "Check it against the photo before you rely on it.",
+            Self::Failed => "The photo saved, so you can still type it in.",
+        }
+    }
+}
 
 #[component]
 pub fn CapturePage() -> impl IntoView {
     // `_local` because FormData is not Send; the upload only ever runs client-side.
     let upload = Action::new_local(|data: &FormData| upload_receipt(data.clone().into()));
 
+    // Whether the picker holds a photo. Reading `value` rather than `files`
+    // keeps us to the web-sys features leptos already turns on.
+    let chosen = RwSignal::new(false);
+
     // Id of the receipt currently being extracted, if any.
-    let receipt_id = Memo::new(move |_| match upload.value().get() {
-        Some(Ok(id)) => Some(id),
-        _ => None,
-    });
+    let receipt_id = Memo::new(move |_| upload.value().get().and_then(|r| r.ok()));
 
     // Extraction runs in the background, so the only way to know it finished is
     // to ask. Ticking a signal re-runs the resource.
@@ -32,21 +80,35 @@ pub fn CapturePage() -> impl IntoView {
         },
     );
 
+    let stage = Memo::new(move |_| {
+        if upload.pending().get() {
+            return Some(Stage::Sending);
+        }
+        match upload.value().get()? {
+            Err(_) => Some(Stage::Failed),
+            Ok(_) => Some(match status.get().flatten() {
+                Some(ExtractionStatus::Done) => Stage::Done,
+                Some(ExtractionStatus::Failed) => Stage::Failed,
+                Some(ExtractionStatus::Extracting) => Stage::Reading,
+                // No status yet means the first poll hasn't landed.
+                Some(ExtractionStatus::Pending) | None => Stage::Queued,
+            }),
+        }
+    });
+
+    let working = move || stage.get().is_some_and(Stage::working);
+
     Effect::new(move |prev_handle: Option<Option<IntervalHandle>>| {
         // Clear any previous timer before starting another.
         if let Some(Some(handle)) = prev_handle {
             handle.clear();
         }
-        receipt_id.get()?;
         // Stop polling once the outcome is settled, rather than hammering the
         // server for the life of the page.
-        let settled = matches!(
-            status.get().flatten(),
-            Some(ExtractionStatus::Done) | Some(ExtractionStatus::Failed)
-        );
-        if settled {
+        if !working() {
             return None;
         }
+        receipt_id.get()?;
         set_interval_with_handle(
             move || tick.update(|t| *t += 1),
             std::time::Duration::from_millis(1500),
@@ -57,88 +119,108 @@ pub fn CapturePage() -> impl IntoView {
     view! {
         <h1 class="mb-4 text-xl font-semibold">"Capture"</h1>
 
-        // Capped on desktop: a file picker and one button have no business
-        // spanning the full content width.
+        // Capped on desktop: a picker and one button have no business spanning
+        // the full content width.
         <form
-            class="flex flex-col gap-4 md:max-w-md"
+            class="flex flex-col gap-3 md:max-w-md"
             on:submit=move |ev: SubmitEvent| {
                 ev.prevent_default();
-                let form = ev.target().unwrap().unchecked_into::<HtmlFormElement>();
-                let data = FormData::new_with_form(&form).unwrap();
+                let data = FormData::new_with_form(&form_element(&ev)).unwrap();
                 upload.dispatch_local(data);
             }
         >
-            // `capture="environment"` opens the rear camera directly on a phone,
-            // and needs no JavaScript at all.
-            <input
-                type="file"
-                name="receipt"
-                accept="image/*"
-                capture="environment"
-                class="rounded-lg border border-edge bg-surface p-3"
-            />
-            <button type="submit" class="rounded-lg border border-edge bg-surface px-4 py-3">
+            // The whole panel is the tap target rather than the browser's own
+            // file button, which is small and looks nothing like the app.
+            <label class="flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-edge bg-surface px-4 py-10 text-center active:bg-edge">
+                <CameraIcon />
+                <span class="font-medium">
+                    {move || if chosen.get() { "Photo ready" } else { "Photograph a receipt" }}
+                </span>
+                <span class="text-sm text-muted">
+                    {move || if chosen.get() { "Tap to retake" } else { "Opens the camera" }}
+                </span>
+                // `capture="environment"` opens the rear camera directly on a
+                // phone, and needs no JavaScript at all. Hidden rather than
+                // removed, so the label still drives it and the form still
+                // carries the file.
+                <input
+                    type="file"
+                    name="receipt"
+                    accept="image/*"
+                    capture="environment"
+                    class="sr-only"
+                    on:change:target=move |ev| chosen.set(!ev.target().value().is_empty())
+                />
+            </label>
+
+            // Nothing to send until a photo is picked, and nothing to send twice
+            // while one is in flight.
+            <button
+                type="submit"
+                disabled=move || !chosen.get() || working()
+                class=format!("{BUTTON} {TAP} font-medium disabled:opacity-40")
+            >
                 "Upload"
             </button>
         </form>
 
         // aria-live so the stages are announced as they change, not just drawn.
-        <div class="mt-6" aria-live="polite">
+        <div class="mt-4 md:max-w-md" aria-live="polite">
             {move || {
-                if upload.pending().get() {
-                    return view! { <Working label="Sending the photo…" /> }.into_any();
-                }
-                match upload.value().get() {
-                    None => view! { <p class="text-muted">"Photograph a receipt."</p> }.into_any(),
-                    Some(Err(e)) => {
-                        view! { <p class="text-danger">{format!("Upload failed: {e}")}</p> }
-                            .into_any()
-                    }
-                    Some(Ok(id)) => {
-                        match status.get().flatten() {
-                            Some(ExtractionStatus::Done) => {
-                                view! {
-                                    <p class="mb-3">"Done reading the receipt."</p>
-                                    <a
-                                        href=format!("/receipt/{id}")
-                                        class="inline-block rounded-lg border border-edge bg-surface px-4 py-3"
-                                    >
-                                        "Review it"
-                                    </a>
-                                }
-                                    .into_any()
-                            }
-                            Some(ExtractionStatus::Failed) => {
-                                view! {
-                                    <p class="text-danger mb-3">"Could not read the receipt."</p>
-                                    <a
-                                        href=format!("/receipt/{id}")
-                                        class="inline-block rounded-lg border border-edge bg-surface px-4 py-3"
-                                    >
-                                        "Enter it by hand"
-                                    </a>
-                                }
-                                    .into_any()
-                            }
-                            // Saved, but the model hasn't picked it up — usually a
-                            // queue behind other uploads.
-                            Some(ExtractionStatus::Pending) => {
-                                view! {
-                                    <Working label="Photo saved. Waiting for the model…" />
-                                }
-                                    .into_any()
-                            }
-                            Some(ExtractionStatus::Extracting) => {
-                                view! {
-                                    <Working label="Reading the receipt… about 10 seconds." />
-                                }
-                                    .into_any()
-                            }
-                            // Uploaded, but the first poll hasn't landed yet.
-                            None => view! { <Working label="Photo saved." /> }.into_any(),
+                stage
+                    .get()
+                    .map(|stage| {
+                        let failed = stage == Stage::Failed;
+                        let edge = if failed { "border-danger" } else { "border-edge" };
+                        // A failed upload has a reason worth reading. A failed
+                        // extraction doesn't — the receipt is there to fill in.
+                        let reason = upload.value().get().and_then(|r| r.err());
+                        view! {
+                            <div class=format!("rounded-xl border {edge} bg-surface p-4")>
+                                <div class="flex items-start gap-3">
+                                    {if stage.working() {
+                                        view! { <Spinner class="mt-0.5" /> }.into_any()
+                                    } else {
+                                        view! { <Verdict ok=!failed class="mt-0.5" /> }.into_any()
+                                    }}
+                                    <div class="min-w-0 flex-1">
+                                        <p class=if failed {
+                                            "font-medium text-danger"
+                                        } else {
+                                            "font-medium"
+                                        }>{stage.heading()}</p>
+                                        <p class="mt-0.5 text-sm text-muted">
+                                            {reason
+                                                .map(|e| e.to_string())
+                                                .unwrap_or_else(|| stage.detail().to_string())}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div class="mt-4">
+                                    <StepBar reached=stage.reached() of=3 bad=failed />
+                                </div>
+
+                                // Once there's a receipt and nothing left to wait
+                                // for, the only thing to do is go and look at it.
+                                {receipt_id
+                                    .get()
+                                    .filter(|_| !stage.working())
+                                    .map(|id| {
+                                        view! {
+                                            <a
+                                                href=format!("/receipt/{id}")
+                                                class=format!(
+                                                    "{BUTTON} {TAP} mt-4 flex items-center justify-center no-underline",
+                                                )
+                                            >
+                                                {if failed { "Enter it by hand" } else { "Review it" }}
+                                            </a>
+                                        }
+                                    })}
+                            </div>
                         }
-                    }
-                }
+                    })
             }}
         </div>
     }

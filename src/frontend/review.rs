@@ -7,8 +7,9 @@ use leptos::prelude::*;
 use leptos::web_sys::SubmitEvent;
 use uuid::Uuid;
 
-use crate::frontend::photo::ReceiptPhoto;
-use crate::frontend::ui::{LabeledInput, field, form_element, reset_form};
+use crate::frontend::components::{
+    BUTTON, INPUT, LabeledInput, Notice, ReceiptPhoto, TAP, Tone, field, form_element, reset_form,
+};
 use crate::shared::api::{
     add_line_item, delete_line_item, delete_receipt, get_receipt, mark_reviewed, update_line_item,
     update_receipt_meta,
@@ -108,9 +109,10 @@ fn ReviewForm(receipt: Receipt, reload: impl Fn() + Copy + Send + Sync + 'static
         }
     });
 
-    let money = |d: Option<rust_decimal::Decimal>| d.map(|v| v.to_string()).unwrap_or_default();
+    // Editing shows the raw value, not a formatted one — it has to parse back.
+    let editable = |d: Option<rust_decimal::Decimal>| d.map(|v| v.to_string()).unwrap_or_default();
 
-    // Collapses the five actions' errors into one place, so a failed save is
+    // Collapses the six actions' errors into one place, so a failed save is
     // never silent.
     let error_text = move || {
         [
@@ -138,199 +140,197 @@ fn ReviewForm(receipt: Receipt, reload: impl Fn() + Copy + Send + Sync + 'static
         // Two columns once there's room: the photo stays put while you scroll the
         // fields, which is the whole job of this screen. Stacked on a phone.
         <div class="md:grid md:grid-cols-2 md:items-start md:gap-6">
-
             // The photo is the source of truth; everything else is a claim about it.
             <ReceiptPhoto src=format!("/receipt-image/{id}") />
 
             // min-w-0 so long merchant names can't push the column wider than half.
             <div class="min-w-0">
+                {(!problems.is_empty())
+                    .then(|| {
+                        view! {
+                            <Notice tone=Tone::Bad>
+                                <p class="mb-2 font-semibold">"Needs attention"</p>
+                                <ul class="list-disc pl-5 text-sm">
+                                    {problems
+                                        .iter()
+                                        .map(|p| view! { <li>{p.clone()}</li> })
+                                        .collect_view()}
+                                </ul>
+                            </Notice>
+                        }
+                    })}
 
-        {(!problems.is_empty())
-            .then(|| {
-                view! {
-                    <div class="mb-4 rounded-lg border border-danger p-3">
-                        <p class="mb-2 font-semibold text-danger">"Needs attention"</p>
-                        <ul class="list-disc pl-5 text-sm">
-                            {problems
-                                .iter()
-                                .map(|p| view! { <li>{p.clone()}</li> })
-                                .collect_view()}
-                        </ul>
-                    </div>
-                }
-            })}
+                {warnings
+                    .map(|w| {
+                        view! { <Notice tone=Tone::Quiet>"Extraction notes: " {w}</Notice> }
+                    })}
 
-        {warnings
-            .map(|w| {
-                view! {
-                    <p class="mb-4 rounded-lg border border-edge p-3 text-sm text-muted">
-                        "Extraction notes: " {w}
-                    </p>
-                }
-            })}
+                {move || {
+                    error_text().map(|e| view! { <Notice tone=Tone::Bad>{e}</Notice> })
+                }}
 
-        {move || {
-            error_text()
-                .map(|e| {
-                    view! { <p class="mb-4 rounded-lg border border-danger p-3 text-danger">{e}</p> }
-                })
-        }}
+                <form
+                    class="mb-6 flex flex-col gap-3"
+                    on:submit=move |ev: SubmitEvent| {
+                        ev.prevent_default();
+                        let form = form_element(&ev);
+                        save_meta
+                            .dispatch(ReceiptEdit {
+                                id,
+                                merchant: field(&form, "merchant"),
+                                purchased_on: field(&form, "purchased_on"),
+                                currency: field(&form, "currency"),
+                                subtotal: field(&form, "subtotal"),
+                                tax: field(&form, "tax"),
+                                total: field(&form, "total"),
+                            });
+                    }
+                >
+                    <LabeledInput label="Merchant" name="merchant" value=receipt.merchant.clone() />
+                    <LabeledInput
+                        label="Date"
+                        name="purchased_on"
+                        value=receipt.purchased_on.to_string()
+                    />
+                    <LabeledInput label="Currency" name="currency" value=receipt.currency.clone() />
+                    <LabeledInput
+                        label="Subtotal"
+                        name="subtotal"
+                        value=editable(receipt.subtotal)
+                        numeric=true
+                    />
+                    <LabeledInput label="Tax" name="tax" value=editable(receipt.tax) numeric=true />
+                    <LabeledInput
+                        label="Total"
+                        name="total"
+                        value=editable(receipt.total)
+                        numeric=true
+                    />
+                    <button type="submit" class=format!("{BUTTON} {TAP}")>
+                        "Save receipt"
+                    </button>
+                </form>
 
-        <form
-            class="mb-6 flex flex-col gap-3"
-            on:submit=move |ev: SubmitEvent| {
-                ev.prevent_default();
-                let form = form_element(&ev);
-                save_meta
-                    .dispatch(ReceiptEdit {
-                        id,
-                        merchant: field(&form, "merchant"),
-                        purchased_on: field(&form, "purchased_on"),
-                        currency: field(&form, "currency"),
-                        subtotal: field(&form, "subtotal"),
-                        tax: field(&form, "tax"),
-                        total: field(&form, "total"),
-                    });
-            }
-        >
-            <LabeledInput label="Merchant" name="merchant" value=receipt.merchant.clone() />
-            <LabeledInput
-                label="Date"
-                name="purchased_on"
-                value=receipt.purchased_on.to_string()
-            />
-            <LabeledInput label="Currency" name="currency" value=receipt.currency.clone() />
-            <LabeledInput label="Subtotal" name="subtotal" value=money(receipt.subtotal) numeric=true />
-            <LabeledInput label="Tax" name="tax" value=money(receipt.tax) numeric=true />
-            <LabeledInput label="Total" name="total" value=money(receipt.total) numeric=true />
-            <button type="submit" class="rounded-lg border border-edge bg-surface px-4 py-3">
-                "Save receipt"
-            </button>
-        </form>
+                <h2 class="mb-2 font-semibold">
+                    "Line items " <span class="text-muted">"(" {items.len()} ")"</span>
+                </h2>
 
-        <h2 class="mb-2 font-semibold">
-            "Line items " <span class="text-muted">"(" {items.len()} ")"</span>
-        </h2>
-
-        <ul class="mb-4 flex flex-col gap-3">
-            {items
-                .into_iter()
-                .map(|item| {
-                    let item_id = item.id;
-                    view! {
-                        <li class="rounded-lg border border-edge p-3">
-                            <form
-                                class="flex flex-col gap-2"
-                                on:submit=move |ev: SubmitEvent| {
-                                    ev.prevent_default();
-                                    let form = form_element(&ev);
-                                    save_item
-                                        .dispatch(LineItemEdit {
-                                            id: item_id,
-                                            description: field(&form, "description"),
-                                            total: field(&form, "total"),
-                                        });
-                                }
-                            >
-                                <input
-                                    name="description"
-                                    value=item.description.clone()
-                                    class="rounded-lg border border-edge bg-ink p-2"
-                                />
-                                <div class="flex gap-2">
-                                    <input
-                                        name="total"
-                                        value=item.total.to_string()
-                                        inputmode="decimal"
-                                        class="min-w-0 flex-1 rounded-lg border border-edge bg-ink p-2"
-                                    />
-                                    <button
-                                        type="submit"
-                                        class="rounded-lg border border-edge bg-surface px-3"
-                                    >
-                                        "Save"
-                                    </button>
-                                    <button
-                                        type="button"
-                                        class="rounded-lg border border-danger px-3 text-danger"
-                                        on:click=move |_| {
-                                            remove_item.dispatch(item_id);
+                <ul class="mb-4 flex flex-col gap-3">
+                    {items
+                        .into_iter()
+                        .map(|item| {
+                            let item_id = item.id;
+                            view! {
+                                <li class="rounded-lg border border-edge p-3">
+                                    <form
+                                        class="flex flex-col gap-2"
+                                        on:submit=move |ev: SubmitEvent| {
+                                            ev.prevent_default();
+                                            let form = form_element(&ev);
+                                            save_item
+                                                .dispatch(LineItemEdit {
+                                                    id: item_id,
+                                                    description: field(&form, "description"),
+                                                    total: field(&form, "total"),
+                                                });
                                         }
                                     >
-                                        "Delete"
-                                    </button>
-                                </div>
-                                {item.edited.then(|| view! { <p class="text-xs text-muted">"edited"</p> })}
-                            </form>
-                        </li>
+                                        <input
+                                            name="description"
+                                            value=item.description.clone()
+                                            class=INPUT
+                                        />
+                                        <div class="flex gap-2">
+                                            <input
+                                                name="total"
+                                                value=item.total.to_string()
+                                                inputmode="decimal"
+                                                class=format!("{INPUT} min-w-0 flex-1")
+                                            />
+                                            <button type="submit" class=format!("{BUTTON} px-3")>
+                                                "Save"
+                                            </button>
+                                            <button
+                                                type="button"
+                                                class="rounded-lg border border-danger px-3 text-danger"
+                                                on:click=move |_| {
+                                                    remove_item.dispatch(item_id);
+                                                }
+                                            >
+                                                "Delete"
+                                            </button>
+                                        </div>
+                                        {item
+                                            .edited
+                                            .then(|| view! { <p class="text-xs text-muted">"edited"</p> })}
+                                    </form>
+                                </li>
+                            }
+                        })
+                        .collect_view()}
+                </ul>
+
+                <form
+                    class="mb-6 flex flex-col gap-2 rounded-lg border border-edge p-3"
+                    on:submit=move |ev: SubmitEvent| {
+                        ev.prevent_default();
+                        let form = form_element(&ev);
+                        let desc = field(&form, "description");
+                        let total = field(&form, "total");
+                        add_item.dispatch((id, desc, total));
+                        reset_form(&form);
                     }
-                })
-                .collect_view()}
-        </ul>
+                >
+                    <p class="font-semibold">"Add a missing item"</p>
+                    <input name="description" placeholder="Description" class=INPUT />
+                    <div class="flex gap-2">
+                        <input
+                            name="total"
+                            placeholder="0.00"
+                            inputmode="decimal"
+                            class=format!("{INPUT} min-w-0 flex-1")
+                        />
+                        <button type="submit" class=format!("{BUTTON} px-3")>
+                            "Add"
+                        </button>
+                    </div>
+                </form>
 
-        <form
-            class="mb-6 flex flex-col gap-2 rounded-lg border border-edge p-3"
-            on:submit=move |ev: SubmitEvent| {
-                ev.prevent_default();
-                let form = form_element(&ev);
-                let desc = field(&form, "description");
-                let total = field(&form, "total");
-                add_item.dispatch((id, desc, total));
-                reset_form(&form);
-            }
-        >
-            <p class="font-semibold">"Add a missing item"</p>
-            <input
-                name="description"
-                placeholder="Description"
-                class="rounded-lg border border-edge bg-ink p-2"
-            />
-            <div class="flex gap-2">
-                <input
-                    name="total"
-                    placeholder="0.00"
-                    inputmode="decimal"
-                    class="min-w-0 flex-1 rounded-lg border border-edge bg-ink p-2"
-                />
-                <button type="submit" class="rounded-lg border border-edge bg-surface px-3">
-                    "Add"
+                <button
+                    class=format!("{BUTTON} {TAP} w-full disabled:opacity-40")
+                    disabled=!has_total
+                    title=(!has_total).then_some("Enter a total first")
+                    on:click=move |_| {
+                        review.dispatch(id);
+                    }
+                >
+                    {if reviewed { "Checked — mark again" } else { "Mark as checked" }}
                 </button>
-            </div>
-        </form>
+                {(!has_total)
+                    .then(|| {
+                        view! {
+                            <p class="mt-2 text-sm text-muted">
+                                "A receipt cannot be marked checked until it has a total."
+                            </p>
+                        }
+                    })}
 
-        <button
-            class="w-full rounded-lg border border-edge bg-surface px-4 py-3 disabled:opacity-40"
-            disabled=!has_total
-            title=(!has_total).then_some("Enter a total first")
-            on:click=move |_| {
-                review.dispatch(id);
-            }
-        >
-            {if reviewed { "Checked — mark again" } else { "Mark as checked" }}
-        </button>
-        {(!has_total)
-            .then(|| {
-                view! {
-                    <p class="mt-2 text-sm text-muted">
-                        "A receipt cannot be marked checked until it has a total."
-                    </p>
-                }
-            })}
-
-        <button
-            class="mt-8 w-full rounded-lg border border-danger px-4 py-3 text-danger"
-            on:click=move |_| {
-                if window()
-                    .confirm_with_message("Delete this receipt and its photo? This cannot be undone.")
-                    .unwrap_or(false)
-                {
-                    discard.dispatch(id);
-                }
-            }
-        >
-            "Delete receipt"
-        </button>
-
+                // Kept well away from the other buttons.
+                <button
+                    class=format!("{TAP} mt-8 w-full rounded-lg border border-danger text-danger")
+                    on:click=move |_| {
+                        if window()
+                            .confirm_with_message(
+                                "Delete this receipt and its photo? This cannot be undone.",
+                            )
+                            .unwrap_or(false)
+                        {
+                            discard.dispatch(id);
+                        }
+                    }
+                >
+                    "Delete receipt"
+                </button>
             </div>
         </div>
     }
