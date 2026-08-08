@@ -234,6 +234,31 @@ pub async fn delete_line_item(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
     load_receipt(&mut db, receipt_id).await
 }
 
+/// Throws away a receipt, its line items and its photo.
+///
+/// For the duplicate upload and the unreadable photo. Without it a bad receipt
+/// sits in the list forever and quietly pads the period total.
+#[server]
+pub async fn delete_receipt(id: Uuid) -> Result<(), ServerFnError> {
+    use crate::server::state::AppState;
+
+    let state = expect_context::<AppState>();
+    let mut db = state.db.clone();
+
+    let image_path = crate::server::query::delete_receipt(&mut db, id)
+        .await
+        .map_err(|e| ServerFnError::new(format!("could not delete receipt: {e}")))?;
+
+    // After the rows, and only a warning: the filesystem isn't part of the
+    // transaction and the receipt is already gone. An orphaned image costs disk;
+    // failing here would report a delete that plainly did happen.
+    if let Err(e) = state.store.delete(&image_path).await {
+        tracing::warn!(%id, %image_path, error = %e, "receipt deleted but its image remains");
+    }
+
+    Ok(())
+}
+
 /// Records that a human has checked this receipt against the photo.
 ///
 /// Refuses while the receipt has no total: marking it reviewed is a claim the

@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::frontend::photo::ReceiptPhoto;
 use crate::frontend::ui::{LabeledInput, field, form_element, reset_form};
 use crate::shared::api::{
-    add_line_item, delete_line_item, get_receipt, mark_reviewed, update_line_item,
+    add_line_item, delete_line_item, delete_receipt, get_receipt, mark_reviewed, update_line_item,
     update_receipt_meta,
 };
 use crate::shared::dto::{LineItemEdit, Receipt, ReceiptEdit};
@@ -82,6 +82,19 @@ fn ReviewForm(receipt: Receipt, reload: impl Fn() + Copy + Send + Sync + 'static
         let rid = *rid;
         async move { mark_reviewed(rid).await }
     });
+    let discard = Action::new(move |rid: &Uuid| {
+        let rid = *rid;
+        async move { delete_receipt(rid).await }
+    });
+
+    // Deliberately not part of the reload effect below — there is nothing left
+    // to refetch, so go back to the list instead.
+    let navigate = leptos_router::hooks::use_navigate();
+    Effect::new(move |_| {
+        if matches!(discard.value().get(), Some(Ok(()))) {
+            navigate("/receipts", Default::default());
+        }
+    });
 
     // Any successful mutation invalidates what is on screen.
     Effect::new(move |_| {
@@ -106,6 +119,7 @@ fn ReviewForm(receipt: Receipt, reload: impl Fn() + Copy + Send + Sync + 'static
             add_item.value().get().and_then(|r| r.err()),
             remove_item.value().get().and_then(|r| r.err()),
             review.value().get().and_then(|r| r.err()),
+            discard.value().get().and_then(|r| r.err()),
         ]
         .into_iter()
         .flatten()
@@ -302,6 +316,20 @@ fn ReviewForm(receipt: Receipt, reload: impl Fn() + Copy + Send + Sync + 'static
                     </p>
                 }
             })}
+
+        <button
+            class="mt-8 w-full rounded-lg border border-danger px-4 py-3 text-danger"
+            on:click=move |_| {
+                if window()
+                    .confirm_with_message("Delete this receipt and its photo? This cannot be undone.")
+                    .unwrap_or(false)
+                {
+                    discard.dispatch(id);
+                }
+            }
+        >
+            "Delete receipt"
+        </button>
 
             </div>
         </div>

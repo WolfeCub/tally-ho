@@ -86,6 +86,21 @@ impl Store {
         Ok(relative)
     }
 
+    /// Removes a stored image. A file that has already gone is not an error —
+    /// the row is on its way out either way, and leaving it behind would strand
+    /// the receipt in the list.
+    pub async fn delete(&self, relative: &str) -> Result<(), StoreError> {
+        let absolute = self.absolute(relative);
+        match tokio::fs::remove_file(&absolute).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(StoreError::Io {
+                path: absolute.display().to_string(),
+                source,
+            }),
+        }
+    }
+
     pub async fn read(&self, relative: &str) -> Result<Vec<u8>, StoreError> {
         let absolute = self.absolute(relative);
         tokio::fs::read(&absolute)

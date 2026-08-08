@@ -1,5 +1,5 @@
-//! Reads that more than one caller needs — the statement period, mostly, which
-//! both the period view and the CSV export go through.
+//! Queries that touch more than one row: the statement period, which both the
+//! period view and the CSV export go through, and throwing a receipt away.
 
 use crate::server::models;
 use crate::shared::dto;
@@ -46,6 +46,25 @@ pub async fn load_range(
         out.push((receipt, items));
     }
     Ok(out)
+}
+
+/// Deletes a receipt and its line items, handing back the image path so the
+/// caller can remove the photo once the rows are actually gone.
+///
+/// Nothing cascades, so the items go first.
+pub async fn delete_receipt(db: &mut toasty::Db, id: uuid::Uuid) -> toasty::Result<String> {
+    let mut tx = db.transaction().await?;
+
+    let receipt = models::Receipt::get_by_id(&mut tx, &id).await?;
+    let image_path = receipt.image_path.clone();
+
+    for item in receipt.line_items().exec(&mut tx).await? {
+        item.delete().exec(&mut tx).await?;
+    }
+    receipt.delete().exec(&mut tx).await?;
+
+    tx.commit().await?;
+    Ok(image_path)
 }
 
 #[cfg(test)]
@@ -144,6 +163,73 @@ mod tests {
         );
         assert_eq!(period.receipts[0].problems.len(), 1);
         assert_eq!(period.needing_attention(), 1);
+    }
+
+    /// The line items are the part that can be left behind: nothing cascades,
+    /// and an orphan would still be counted by anything loading items directly.
+    #[tokio::test]
+    async fn deleting_a_receipt_takes_its_line_items_with_it() {
+        use crate::server::models::LineItem;
+
+        let mut db = crate::server::db::connect_url("sqlite::memory:")
+            .await
+            .unwrap();
+
+        let doomed = toasty::create!(Receipt {
+            purchased_on: jiff::civil::date(2026, 7, 20),
+            merchant: "Duplicate",
+            total: dec("32.00"),
+            currency: "USD",
+            image_path: "images/2026/07/doomed.jpg",
+            line_items: [
+                { description: "Milk", total: dec("10.00"), position: 0 },
+                { description: "Eggs", total: dec("22.00"), position: 1 },
+            ],
+        })
+        .exec(&mut db)
+        .await
+        .unwrap();
+
+        // A second receipt, to catch a delete that is too enthusiastic.
+        toasty::create!(Receipt {
+            purchased_on: jiff::civil::date(2026, 7, 21),
+            merchant: "Keeper",
+            total: dec("5.00"),
+            currency: "USD",
+            image_path: "images/2026/07/keeper.jpg",
+            line_items: [{ description: "Coffee", total: dec("5.00"), position: 0 }],
+        })
+        .exec(&mut db)
+        .await
+        .unwrap();
+
+        let image_path = super::delete_receipt(&mut db, doomed.id).await.unwrap();
+        assert_eq!(
+            image_path, "images/2026/07/doomed.jpg",
+            "for the file delete"
+        );
+
+        assert!(
+            Receipt::get_by_id(&mut db, &doomed.id).await.is_err(),
+            "receipt still there"
+        );
+
+        let items = LineItem::filter(LineItem::fields().receipt_id().eq(doomed.id))
+            .exec(&mut db)
+            .await
+            .unwrap();
+        assert!(items.is_empty(), "orphaned line items: {}", items.len());
+
+        let survivors = super::load_range(
+            &mut db,
+            jiff::civil::date(2026, 7, 1),
+            jiff::civil::date(2026, 7, 31),
+        )
+        .await
+        .unwrap();
+        assert_eq!(survivors.len(), 1);
+        assert_eq!(survivors[0].0.merchant, "Keeper");
+        assert_eq!(survivors[0].1.len(), 1);
     }
 
     /// The CSV must describe the same period the view does.
