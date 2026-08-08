@@ -62,8 +62,6 @@
 
         common = {
           inherit src;
-          pname = "tally-ho";
-          version = "0.1.0";
           strictDeps = true;
           nativeBuildInputs = leptosTools;
 
