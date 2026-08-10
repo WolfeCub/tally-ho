@@ -64,7 +64,10 @@ async fn run(state: &AppState, receipt_id: Uuid) -> Result<(), JobError> {
         // a period; a wrong-but-plausible date is exactly why the review screen
         // flags anything with warnings.
         purchased_on: n.purchased_on.unwrap_or_else(|| jiff::Zoned::now().date()),
-        currency: n.currency.unwrap_or_else(|| "USD".to_string()),
+        // Receipts often don't print a currency, and one in the wrong currency
+        // matches no charge at all. So fall back to what the statements are in
+        // rather than to a guess.
+        currency: n.currency.unwrap_or_else(|| state.currency.clone()),
         subtotal: n.subtotal,
         tax: n.tax,
         total: n.total,

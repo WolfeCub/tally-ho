@@ -5,7 +5,7 @@ use leptos::web_sys::FormData;
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
-use crate::frontend::components::INPUT;
+use crate::frontend::components::{INPUT, Spinner};
 use crate::frontend::money::money;
 use crate::frontend::text::plural;
 use crate::shared::api::upload_receipt;
@@ -129,13 +129,23 @@ fn ChargeBody(
 /// purpose — but the split is only as good as what's behind it.
 #[component]
 fn Caveats(matched: Matched, amount: Decimal, shared: Shared) -> impl IntoView {
+    // Until the model has been through it there is nothing to caveat, and every
+    // note below would just be restating that: no total, no items, nothing
+    // checked. Photographing a receipt here lands in exactly this state.
+    if !matched.status.is_terminal() {
+        return view! {
+            <p class="mt-1 flex items-center gap-2 text-sm text-muted">
+                <Spinner class="size-4" />
+                "Reading it now…"
+            </p>
+        }
+        .into_any();
+    }
+
     // Red only for the one that quietly corrupts the export; the rest are things
     // to know, and four red lines a row would train you to ignore them.
     let mut notes = Vec::new();
 
-    if !matched.status.is_terminal() {
-        notes.push(("Still being read.".to_string(), false));
-    }
     if let Some(total) = matched.total.filter(|total| *total != amount) {
         notes.push((format!("The receipt says {}.", shared.money(total)), false));
     }
@@ -163,6 +173,15 @@ fn Caveats(matched: Matched, amount: Decimal, shared: Shared) -> impl IntoView {
             view! { <p class=class>{note}</p> }
         })
         .collect_view()
+        .into_any()
+}
+
+/// Whether a charge is waiting on the model, which is what the screen polls on.
+pub fn still_reading(charge: &Charge) -> bool {
+    charge
+        .resolution
+        .receipt()
+        .is_some_and(|matched| !matched.status.is_terminal())
 }
 
 #[component]

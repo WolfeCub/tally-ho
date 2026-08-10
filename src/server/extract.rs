@@ -1,4 +1,9 @@
-//! Receipt line-item extraction against a local model via Ollama.
+//! Receipt line-item extraction against local models via Ollama.
+//!
+//! Two stages, because reading a creased receipt and structuring it are different
+//! skills: a small OCR model transcribes the photo, then the vision model turns
+//! that text into [`ExtractedReceipt`] without ever seeing the image. Setting
+//! `OLLAMA_OCR_MODEL` empty collapses it back to one model reading the photo.
 //!
 //! # Why not `rig`'s `Extractor`
 //!
@@ -33,17 +38,37 @@ use super::image::{self, ImageError};
 
 const DEFAULT_URL: &str = "http://localhost:11434";
 const DEFAULT_MODEL: &str = "gemma4:12b";
+
+/// Reads the photo, which [`DEFAULT_MODEL`] then structures. A 1.1B model that
+/// only does OCR reads a creased receipt far better than a 12B generalist does:
+/// every amount and barcode right in ~2s, against `2.44` coming back as `14.00`.
+const DEFAULT_OCR_MODEL: &str = "glm-ocr:q8_0";
+
+/// Ollama's `num_ctx` for the OCR model, which is the one setting here that can't
+/// be left to the server default. The photo is most of the prompt and the
+/// transcript has to fit in what's left: at 2048 the test receipt stops after
+/// three of its five items and loses every total, which downstream reads as a
+/// receipt that simply hadn't got any. 4096 transcribes that one whole, so this
+/// is double it — a long grocery receipt is a much longer transcript.
+const DEFAULT_OCR_CONTEXT: u32 = 8192;
+
+/// Downscale only, and about cost rather than accuracy — the OCR model reads this
+/// receipt anywhere from 1024 to 5096 pixels. Past this it's just tiled into more
+/// pieces: 2.1s here against 10s at native, for the same text. Below it the
+/// transcript gets noisier — fenced, repeating — which lost a subtotal at 1024.
 const DEFAULT_MAX_EDGE: u32 = 1600;
 
-/// Ollama's `num_predict`. Measured at ~40 output tokens per line item plus
-/// ~130 of fixed JSON overhead, so this covers a long grocery receipt with room
-/// to spare. It exists mainly as a backstop: without a cap, a model that fails
-/// to terminate blocks the request indefinitely instead of failing.
+/// Ollama's `num_predict`, for the transcript as much as the JSON. Measured at
+/// ~40 output tokens per line item plus ~130 of fixed JSON overhead, so this
+/// covers a long grocery receipt with room to spare. It exists mainly as a
+/// backstop: without a cap, a model that fails to terminate blocks the request
+/// indefinitely instead of failing.
 const MAX_OUTPUT_TOKENS: u64 = 2048;
 
-/// Wall-clock ceiling for one extraction. Decode measured at ~32 tok/s, so a
-/// full `MAX_OUTPUT_TOKENS` response is ~65s; the rest is headroom for the
-/// request queueing behind other work on the same Ollama instance.
+/// Wall-clock ceiling for one request, so a two-stage extraction can take twice
+/// it. Decode measured at ~32 tok/s, so a full `MAX_OUTPUT_TOKENS` response is
+/// ~65s; the rest is headroom for the request queueing behind other work on the
+/// same Ollama instance.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// What the model is asked to produce.
@@ -123,6 +148,10 @@ total.
 Do not create line items for SUBTOTAL, TAX, TOTAL, tender or change lines, \
 loyalty balances, barcodes, or store metadata.";
 
+/// All the OCR model is asked for. It has no chat template to speak of and one
+/// job, so there's nothing to gain by saying more.
+const OCR_PROMPT: &str = "Transcribe this receipt exactly as printed, line by line.";
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractError {
     #[error("image preparation failed: {0}")]
@@ -162,19 +191,43 @@ pub trait ReceiptExtractor: Send + Sync {
 pub struct Config {
     pub url: String,
     pub model: String,
+    /// Transcribes the photo before [`Self::model`] structures it. Set
+    /// `OLLAMA_OCR_MODEL` empty to skip that and hand the photo straight to the
+    /// vision model, which is worse but needs only the one model pulled.
+    pub ocr_model: Option<String>,
+    /// Context window for [`Self::ocr_model`], big enough for the photo and the
+    /// transcript it comes back as.
+    pub ocr_context: u32,
     pub max_image_edge: u32,
 }
 
 impl Config {
     pub fn from_env() -> Self {
+        let ocr_model =
+            std::env::var("OLLAMA_OCR_MODEL").unwrap_or_else(|_| DEFAULT_OCR_MODEL.to_string());
+
         Self {
             url: std::env::var("OLLAMA_URL").unwrap_or_else(|_| DEFAULT_URL.to_string()),
             model: std::env::var("OLLAMA_VISION_MODEL")
                 .unwrap_or_else(|_| DEFAULT_MODEL.to_string()),
+            ocr_model: Some(ocr_model).filter(|m| !m.trim().is_empty()),
+            ocr_context: std::env::var("OLLAMA_OCR_CONTEXT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_OCR_CONTEXT),
             max_image_edge: std::env::var("MAX_IMAGE_EDGE")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(DEFAULT_MAX_EDGE),
+        }
+    }
+
+    /// What produced a receipt, for the `model_used` column — both models when
+    /// there are two, so a bad batch is traceable to the pair that made it.
+    pub fn label(&self) -> String {
+        match &self.ocr_model {
+            Some(ocr) => format!("{ocr} + {}", self.model),
+            None => self.model.clone(),
         }
     }
 }
@@ -183,6 +236,8 @@ pub struct OllamaExtractor {
     // `Agent` is generic over the completion model in rig 0.41; the Ollama
     // model type defaults its HTTP backend to `reqwest::Client`.
     agent: Agent<ollama::CompletionModel>,
+    /// Absent when there's no OCR model, in which case `agent` reads the photo.
+    ocr: Option<Agent<ollama::CompletionModel>>,
     config: Config,
 }
 
@@ -225,11 +280,54 @@ impl OllamaExtractor {
             .output_mode(OutputMode::Native)
             .build();
 
-        Ok(Self { agent, config })
+        // No preamble and no schema: it does one thing, and its Ollama template is
+        // a bare prompt, so a system message has nowhere to go.
+        let ocr = config.ocr_model.as_deref().map(|model| {
+            client
+                .agent(model)
+                .temperature(0.0)
+                .max_tokens(MAX_OUTPUT_TOKENS)
+                // rig lifts `num_ctx` into Ollama's `options`.
+                .additional_params(serde_json::json!({ "num_ctx": config.ocr_context }))
+                .build()
+        });
+
+        Ok(Self { agent, ocr, config })
     }
 
-    pub fn model(&self) -> &str {
-        &self.config.model
+    /// One turn, bounded, with the two failure modes kept apart. `context` is the
+    /// ceiling we set on this agent, where we set one.
+    async fn ask(
+        agent: &Agent<ollama::CompletionModel>,
+        message: Message,
+        context: Option<u32>,
+    ) -> Result<String, ExtractError> {
+        let response =
+            tokio::time::timeout(REQUEST_TIMEOUT, agent.runner(message).max_turns(1).run())
+                .await
+                .map_err(|_| ExtractError::Timeout(REQUEST_TIMEOUT))?
+                .map_err(|e| ExtractError::Prompt(e.to_string()))?;
+
+        // A filled context cuts the transcript off mid-receipt and reports no error;
+        // the tell is the token count landing on the limit. Zero means Ollama sent
+        // no count at all.
+        let used = response.usage.total_tokens;
+        if used > 0 && context.is_some_and(|limit| used >= u64::from(limit)) {
+            tracing::error!(
+                tokens = used,
+                "the OCR context filled, so the transcript stops mid-receipt — raise \
+                 OLLAMA_OCR_CONTEXT"
+            );
+        }
+
+        let output = response.output;
+
+        // Distinguish "no content" from "bad JSON" — very different causes, and an
+        // empty body otherwise surfaces as "expected value at line 1 column 1".
+        if output.trim().is_empty() {
+            return Err(ExtractError::EmptyResponse);
+        }
+        Ok(output)
     }
 }
 
@@ -241,39 +339,37 @@ impl ReceiptExtractor for OllamaExtractor {
 
         // Ollama accepts base64 only: rig's provider hard-errors on the `Raw`
         // and `Url` image source kinds.
-        let message = Message::User {
+        let photo = |instruction: &str| Message::User {
             content: OneOrMany::many([
-                UserContent::image_base64(b64, Some(ImageMediaType::JPEG), None),
-                UserContent::text("Extract every line item from this receipt."),
+                UserContent::image_base64(b64.clone(), Some(ImageMediaType::JPEG), None),
+                UserContent::text(instruction),
             ])
             .expect("two content parts is never empty"),
         };
 
         let started = Instant::now();
-        // Bounded: a model that never terminates would otherwise pin a
-        // background task forever.
-        let response = tokio::time::timeout(
-            REQUEST_TIMEOUT,
-            self.agent.runner(message).max_turns(1).run(),
-        )
-        .await
-        .map_err(|_| ExtractError::Timeout(REQUEST_TIMEOUT))?
-        .map_err(|e| ExtractError::Prompt(e.to_string()))?;
-        let elapsed = started.elapsed();
+        let message = match &self.ocr {
+            // Reading and structuring are separate skills, so they're separate
+            // models: this one transcribes, and the schema-bound one below never
+            // sees the photo.
+            Some(ocr) => {
+                let transcript =
+                    Self::ask(ocr, photo(OCR_PROMPT), Some(self.config.ocr_context)).await?;
+                Message::user(format!("The receipt, transcribed:\n\n{transcript}"))
+            }
+            None => photo("Extract every line item from this receipt."),
+        };
 
-        let raw = response.output;
-        // Distinguish "no content" from "bad JSON" — they have very different
-        // causes, and an empty body otherwise surfaces as a confusing
-        // "expected value at line 1 column 1".
-        if raw.trim().is_empty() {
-            return Err(ExtractError::EmptyResponse);
-        }
+        // No ceiling passed: this agent runs on whatever context Ollama is
+        // configured with, so there's nothing to compare against.
+        let raw = Self::ask(&self.agent, message, None).await?;
+        let elapsed = started.elapsed();
         let receipt: ExtractedReceipt = serde_json::from_str(&raw)?;
 
         Ok(Extraction {
             receipt,
             raw,
-            model: self.config.model.clone(),
+            model: self.config.label(),
             elapsed,
         })
     }

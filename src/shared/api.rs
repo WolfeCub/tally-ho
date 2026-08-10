@@ -295,20 +295,18 @@ pub async fn import_statement(data: MultipartData) -> Result<dto::Imported, Serv
     let mut data = data.into_inner().expect("multipart data on the server");
 
     let mut label = String::new();
-    let mut currency = String::new();
     let mut bytes: Vec<u8> = Vec::new();
     while let Ok(Some(mut field)) = data.next_field().await {
-        match field.name() {
-            Some("statement") => {
-                label = field.file_name().unwrap_or("statement.csv").to_string();
-                while let Ok(Some(chunk)) = field.chunk().await {
-                    bytes.extend_from_slice(&chunk);
-                }
-            }
-            Some("currency") => currency = field.text().await.unwrap_or_default(),
-            // Anything else is ignored rather than trusted.
-            _ => continue,
+        // The browser sends one file field; anything else is ignored rather
+        // than trusted.
+        if field.name() != Some("statement") {
+            continue;
         }
+        label = field.file_name().unwrap_or("statement.csv").to_string();
+        while let Ok(Some(chunk)) = field.chunk().await {
+            bytes.extend_from_slice(&chunk);
+        }
+        break;
     }
 
     if bytes.is_empty() {
@@ -317,13 +315,9 @@ pub async fn import_statement(data: MultipartData) -> Result<dto::Imported, Serv
 
     let parsed =
         statements::parse::charges(&bytes).map_err(|e| ServerFnError::new(e.to_string()))?;
-    let currency = match currency.trim() {
-        "" => "USD".to_string(),
-        typed => typed.to_uppercase(),
-    };
 
     let mut db = state.db.clone();
-    let id = statements::import(&mut db, &label, &currency, &parsed)
+    let id = statements::import(&mut db, &label, &state.currency, &parsed)
         .await
         .map_err(|e| ServerFnError::new(format!("could not import the statement: {e}")))?;
 

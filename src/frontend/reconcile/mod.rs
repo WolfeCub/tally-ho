@@ -18,7 +18,7 @@ use crate::shared::api::{
     spare_receipts,
 };
 use crate::shared::dto::{Imported, ReceiptSummary, Resolve, Statement, StatementSummary};
-use charge::{ChargeRow, Shared};
+use charge::{ChargeRow, Shared, still_reading};
 
 #[component]
 pub fn StatementsPage() -> impl IntoView {
@@ -57,12 +57,6 @@ pub fn StatementsPage() -> impl IntoView {
                     class=INPUT
                     on:change:target=move |ev| chosen.set(!ev.target().value().is_empty())
                 />
-            </label>
-            <label class="flex flex-col gap-1">
-                <span class="text-sm text-muted">"Currency"</span>
-                // Matching never crosses currencies, so this decides which
-                // receipts are even considered.
-                <input name="currency" value="USD" class=format!("{INPUT} w-24") />
             </label>
             <button
                 type="submit"
@@ -193,6 +187,24 @@ pub fn ReconcilePage() -> impl IntoView {
         let statement = get_statement(id).await?;
         let spare = spare_receipts(100).await?;
         Ok::<_, ServerFnError>(Some((statement, spare)))
+    });
+
+    // A receipt photographed here is attached while the model is still reading it,
+    // and nothing pushes the result down when it lands — so ask again. In an effect
+    // because timers are wasm-only, and here rather than in the view so that a
+    // refetch reconsiders the one pending timer instead of stacking another on it.
+    Effect::new(move |previous: Option<Option<TimeoutHandle>>| {
+        if let Some(Some(timer)) = previous {
+            timer.clear();
+        }
+        let waiting = matches!(
+            data.get(),
+            Some(Ok(Some((ref statement, _)))) if statement.charges.iter().any(still_reading)
+        );
+        if !waiting {
+            return None;
+        }
+        set_timeout_with_handle(move || data.refetch(), std::time::Duration::from_secs(2)).ok()
     });
 
     view! {

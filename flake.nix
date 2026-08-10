@@ -177,9 +177,7 @@
           # Ollama runs on the OrbStack host, not in here.
           OLLAMA_URL = "http://host.orb.internal:11434";
           OLLAMA_VISION_MODEL = "gemma4:12b";
-          # What extraction was tuned against. Lower doesn't help — prefill is
-          # ~1s at any size.
-          MAX_IMAGE_EDGE = "1024";
+          OLLAMA_OCR_MODEL = "glm-ocr:q8_0";
           RUST_LOG = "info,tally_ho=debug";
         };
       }

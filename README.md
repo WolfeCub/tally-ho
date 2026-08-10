@@ -17,12 +17,17 @@ nix develop          # or let direnv do it
 cargo leptos watch
 ```
 
-Needs an Ollama instance with a vision model pulled.
+Needs an Ollama instance with both models pulled: one to read a receipt photo,
+one to turn the text into line items.
 
 | Variable | Default |
 |---|---|
 | `OLLAMA_URL` | `http://localhost:11434` |
 | `OLLAMA_VISION_MODEL` | `gemma4:12b` |
+| `OLLAMA_OCR_MODEL` | `glm-ocr:q8_0` — empty to let the vision model read the photo itself |
+| `OLLAMA_OCR_CONTEXT` | `8192` — `num_ctx` for the OCR model; too small silently truncates the transcript |
+| `MAX_IMAGE_EDGE` | `1600` — longest edge a photo is downscaled to before it's read |
+| `CURRENCY` | `USD` — the ISO code your statements are in |
 | `DATABASE_URL` | `sqlite:./data/tally-ho.db` |
 | `DATA_DIR` | `./data` |
 

@@ -39,8 +39,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::from_env();
     println!(
-        "model={} url={} max_edge={}\n",
-        config.model, config.url, config.max_image_edge
+        "model={} url={} max_edge={} ocr_context={}\n",
+        config.label(),
+        config.url,
+        config.max_image_edge,
+        config.ocr_context
     );
 
     let extractor = OllamaExtractor::new(config)?;
