@@ -98,6 +98,11 @@
             # writes none, and the hook is fatal, so the build dies without this.
             doNotPostBuildInstallCargoBinaries = true;
 
+            # The default fixup only strips debug sections, and a rust release
+            # build has none — the symbol table is the 16MB. Opt in to a full
+            # strip, which is per package in nixpkgs.
+            stripAllList = ["bin"];
+
             # cargo-leptos 0.3.7 puts the binary in target/release. Only
             # bin-target gets built, so there's no `migrate` to install.
             installPhaseCommand = ''
@@ -127,13 +132,6 @@
           # The default of 1 would re-push the whole closure for a one-line change.
           maxLayers = 100;
 
-          copyToRoot = [
-            tally-ho
-            # Without a zoneinfo db, jiff ignores TZ and uses UTC, which can file a
-            # receipt in the wrong statement period.
-            pkgs.tzdata
-          ];
-
           config = {
             entrypoint = ["${tally-ho}/bin/tally-ho"];
             workingdir = "/data";
@@ -145,6 +143,8 @@
               "LEPTOS_SITE_ADDR=0.0.0.0:3000"
               "DATA_DIR=/data"
               "DATABASE_URL=sqlite:/data/tally-ho.db"
+              # Without a zoneinfo db, jiff ignores TZ and uses UTC, which can file
+              # a receipt in the wrong statement period.
               "TZDIR=${pkgs.tzdata}/share/zoneinfo"
               "RUST_LOG=info"
             ];
