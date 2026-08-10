@@ -143,6 +143,9 @@
               "LEPTOS_SITE_ADDR=0.0.0.0:3000"
               "DATA_DIR=/data"
               "DATABASE_URL=sqlite:/data/tally-ho.db"
+              # reqwest won't build a client without a CA bundle, and it panics
+              # rather than returning an error. There's no /etc/ssl in the image.
+              "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
               # Without a zoneinfo db, jiff ignores TZ and uses UTC, which can file
               # a receipt in the wrong statement period.
               "TZDIR=${pkgs.tzdata}/share/zoneinfo"
