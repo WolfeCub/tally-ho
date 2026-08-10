@@ -4,7 +4,7 @@ use jiff::civil::Date;
 use leptos::prelude::*;
 use leptos::web_sys::SubmitEvent;
 
-use crate::frontend::components::{BUTTON, INPUT, ReceiptRows, TAP};
+use crate::frontend::components::{AS_BUTTON, BUTTON, INPUT, ReceiptRows};
 use crate::frontend::money::money_total;
 use crate::frontend::text::plural;
 use crate::shared::api::receipts_in_range;
@@ -12,9 +12,9 @@ use crate::shared::dto::PeriodSummary;
 
 #[component]
 pub fn PeriodPage() -> impl IntoView {
-    // What the user has typed, empty until they touch a picker. The server picks
-    // the default period, since `jiff` has no clock on wasm without its `js`
-    // feature, so an untouched input shows whatever came back.
+    // What's in the pickers — blank until the first period lands and fills them
+    // in. The server picks that default, since `jiff` has no clock on wasm
+    // without its `js` feature.
     let from_str = RwSignal::new(String::new());
     let to_str = RwSignal::new(String::new());
 
@@ -23,32 +23,27 @@ pub fn PeriodPage() -> impl IntoView {
     // `(None, None)` asks the server for its default.
     let range = RwSignal::new((None::<Date>, None::<Date>));
     // Blocking so the period arrives in the initial HTML instead of streaming in.
-    // The date inputs still fill on hydration — reading a resource outside a
-    // Suspense gives nothing on the server.
     let summary = Resource::new_blocking(
         move || range.get(),
         |(from, to)| async move { receipts_in_range(from, to).await },
     );
 
-    let loaded = move || summary.get().and_then(|r| r.ok());
-    // Derived rather than written into the signals by an effect: an untouched
-    // input tracks the loaded period, and clearing one puts it back to tracking
-    // rather than leaving a stale date behind.
-    let shown_from = move || match from_str.get() {
-        s if s.is_empty() => loaded().map(|s| s.from.to_string()).unwrap_or_default(),
-        s => s,
-    };
-    let shown_to = move || match to_str.get() {
-        s if s.is_empty() => loaded().map(|s| s.to.to_string()).unwrap_or_default(),
-        s => s,
-    };
+    // In an effect rather than derived from the resource: the inputs render
+    // before the period lands, and reading it during render would put different
+    // dates in the server's HTML than the client's.
+    Effect::new(move |_| {
+        if let Some(Ok(summary)) = summary.get() {
+            from_str.set(summary.from.to_string());
+            to_str.set(summary.to.to_string());
+        }
+    });
 
     let apply = move |ev: SubmitEvent| {
         ev.prevent_default();
         // A blank or unparseable end falls back to the server default, which is
         // what the input was showing anyway.
         let parse = |s: String| s.trim().parse::<Date>().ok();
-        range.set((parse(shown_from()), parse(shown_to())));
+        range.set((parse(from_str.get()), parse(to_str.get())));
     };
 
     let date_input = format!("{INPUT} min-h-11 flex-1 sm:flex-none");
@@ -60,25 +55,24 @@ pub fn PeriodPage() -> impl IntoView {
         // controls to ask for a different period. One row as soon as it fits.
         <form class="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center" on:submit=apply>
             <div class="flex items-center gap-2">
-                // `value` is what the server renders; `prop:value` is what keeps
-                // the live DOM in step once hydrated.
+                // `prop:value` rather than `value`: the effect above fills these
+                // in after the first render, and only the property moves the
+                // live DOM.
                 <input
                     type="date"
                     class=date_input.clone()
-                    value=shown_from
-                    prop:value=shown_from
+                    prop:value=move || from_str.get()
                     on:input:target=move |ev| from_str.set(ev.target().value())
                 />
                 <span class="text-muted">"→"</span>
                 <input
                     type="date"
                     class=date_input
-                    value=shown_to
-                    prop:value=shown_to
+                    prop:value=move || to_str.get()
                     on:input:target=move |ev| to_str.set(ev.target().value())
                 />
             </div>
-            <button type="submit" class=format!("{BUTTON} {TAP}")>
+            <button type="submit" class=BUTTON>
                 "Show period"
             </button>
         </form>
@@ -88,7 +82,7 @@ pub fn PeriodPage() -> impl IntoView {
         }>
             {move || Suspend::new(async move {
                 match summary.await {
-                    Err(e) => view! { <p class="text-danger">{format!("{e}")}</p> }.into_any(),
+                    Err(e) => view! { <p class="text-danger">{e.to_string()}</p> }.into_any(),
                     Ok(s) => view! { <PeriodBody summary=s /> }.into_any(),
                 }
             })}
@@ -154,9 +148,7 @@ fn PeriodBody(summary: PeriodSummary) -> impl IntoView {
                 <a
                     href=export
                     download
-                    class=format!(
-                        "{BUTTON} {TAP} mt-3 flex items-center justify-center no-underline sm:mt-0",
-                    )
+                    class=format!("{BUTTON} {AS_BUTTON} mt-3 sm:mt-0")
                 >
                     "Export CSV"
                 </a>

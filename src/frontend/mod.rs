@@ -1,15 +1,17 @@
 //! The UI. Rendered on the server first and hydrated in the browser, so all of
 //! it compiles for both targets.
 //!
-//! A module per screen — capture, receipts, review, period — and the rest is
-//! bits more than one of them needs.
+//! A module per screen — capture, receipts, review, period, settings — and the
+//! rest is bits more than one of them needs.
 
+mod actions;
 mod capture;
 mod components;
 mod money;
 mod period;
 mod receipts;
 mod review;
+mod settings;
 mod text;
 
 use leptos::prelude::*;
@@ -21,6 +23,7 @@ use capture::CapturePage;
 use period::PeriodPage;
 use receipts::ReceiptListPage;
 use review::ReviewPage;
+use settings::SettingsPage;
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     view! {
@@ -68,6 +71,7 @@ pub fn App() -> impl IntoView {
                     <Route path=path!("/receipts") view=ReceiptListPage />
                     <Route path=path!("/receipt/:id") view=ReviewPage />
                     <Route path=path!("/period") view=PeriodPage />
+                    <Route path=path!("/settings") view=SettingsPage />
                 </Routes>
             </main>
         </Router>
@@ -97,6 +101,9 @@ fn NavBar() -> impl IntoView {
                 </A>
                 <A href="/period" attr:class=link>
                     "Period"
+                </A>
+                <A href="/settings" attr:class=link>
+                    "Settings"
                 </A>
             </div>
         </nav>

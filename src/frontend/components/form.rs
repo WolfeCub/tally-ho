@@ -1,4 +1,5 @@
-//! Labelled inputs and the plumbing that reads them back.
+//! Labelled inputs, the plumbing that reads them back, and asking before
+//! something irreversible.
 //!
 //! Every form here is uncontrolled — read on submit rather than a signal per
 //! input. The server returns the whole receipt after each save, so there's
@@ -13,6 +14,8 @@ use super::INPUT;
 pub fn LabeledInput(
     label: &'static str,
     name: &'static str,
+    /// Empty for a form that starts blank.
+    #[prop(optional, into)]
     value: String,
     /// `date` gets the platform picker; the rest are text.
     #[prop(default = "text")]
@@ -49,4 +52,12 @@ pub fn field(form: &HtmlFormElement, name: &str) -> String {
         .ok()
         .and_then(|d| d.get(name).as_string())
         .unwrap_or_default()
+}
+
+/// Asks before something that can't be undone. A browser that won't ask counts
+/// as a no.
+pub fn confirm(question: &str) -> bool {
+    leptos::prelude::window()
+        .confirm_with_message(question)
+        .unwrap_or(false)
 }

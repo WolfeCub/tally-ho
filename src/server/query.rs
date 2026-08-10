@@ -68,6 +68,7 @@ pub struct ItemSave {
     pub id: Option<uuid::Uuid>,
     pub description: String,
     pub total: rust_decimal::Decimal,
+    pub person_id: Option<uuid::Uuid>,
 }
 
 /// Writes the review screen in one go: the header fields, plus the line items as
@@ -117,6 +118,7 @@ pub async fn save_receipt(
                     total: item.total,
                     position: position,
                     edited: edited,
+                    person_id: item.person_id,
                 })
                 .exec(&mut tx)
                 .await?;
@@ -128,6 +130,7 @@ pub async fn save_receipt(
                     total: item.total,
                     position: position,
                     edited: true,
+                    person_id: item.person_id,
                 })
                 .exec(&mut tx)
                 .await?;
@@ -159,6 +162,71 @@ pub async fn delete_receipt(db: &mut toasty::Db, id: uuid::Uuid) -> toasty::Resu
 
     tx.commit().await?;
     Ok(image_path)
+}
+
+/// A person as the settings screen left them, already parsed.
+pub struct PersonSave {
+    /// `None` for someone the human added.
+    pub id: Option<uuid::Uuid>,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+/// Writes the settings screen in one go: everyone it ended up with, as a
+/// complete replacement for whoever is stored.
+///
+/// One transaction — a half-applied save could leave items charged to somebody
+/// who was meant to be gone.
+pub async fn save_people(db: &mut toasty::Db, people: Vec<PersonSave>) -> toasty::Result<()> {
+    let mut tx = db.transaction().await?;
+
+    let mut existing: std::collections::HashMap<_, _> = models::Person::all()
+        .exec(&mut tx)
+        .await?
+        .into_iter()
+        .map(|person| (person.id, person))
+        .collect();
+
+    for person in people {
+        // Removing as we go, so what's left over is who the human removed. An
+        // id that isn't there any more falls through to a create.
+        match person.id.and_then(|id| existing.remove(&id)) {
+            Some(mut row) => {
+                toasty::update!(row {
+                    name: person.name,
+                    description: person.description,
+                })
+                .exec(&mut tx)
+                .await?;
+            }
+            None => {
+                toasty::create!(models::Person {
+                    name: person.name,
+                    description: person.description,
+                })
+                .exec(&mut tx)
+                .await?;
+            }
+        }
+    }
+
+    for person in existing.into_values() {
+        // Nothing cascades, and an item pointing at somebody who isn't there
+        // would be neither assigned nor unassigned — it would drop out of both
+        // halves of the split.
+        for mut item in
+            models::LineItem::filter(models::LineItem::fields().person_id().eq(person.id))
+                .exec(&mut tx)
+                .await?
+        {
+            toasty::update!(item { person_id: None })
+                .exec(&mut tx)
+                .await?;
+        }
+        person.delete().exec(&mut tx).await?;
+    }
+
+    tx.commit().await
 }
 
 #[cfg(test)]
@@ -372,18 +440,21 @@ mod tests {
                         id: Some(milk.id),
                         description: "Milk".into(),
                         total: dec("10.00"),
+                        person_id: None,
                     },
                     // Corrected.
                     super::ItemSave {
                         id: Some(eggs.id),
                         description: "Eggs".into(),
                         total: dec("12.00"),
+                        person_id: None,
                     },
                     // Added on screen. "Misread" is absent, so it goes.
                     super::ItemSave {
                         id: None,
                         description: "Bread".into(),
                         total: dec("8.00"),
+                        person_id: None,
                     },
                 ],
             },
@@ -419,6 +490,170 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(all.len(), 3, "the misread row is gone");
+    }
+
+    /// One save has to rename, add and remove people at once — the settings
+    /// screen sends the list it ended up with, not a diff.
+    #[tokio::test]
+    async fn saving_people_replaces_the_whole_list() {
+        use crate::server::models::Person;
+
+        let mut db = crate::server::db::connect_url("sqlite::memory:")
+            .await
+            .unwrap();
+
+        let josh = toasty::create!(Person { name: "Josh" })
+            .exec(&mut db)
+            .await
+            .unwrap();
+        let typo = toasty::create!(Person { name: "Asj" })
+            .exec(&mut db)
+            .await
+            .unwrap();
+
+        super::save_people(
+            &mut db,
+            vec![
+                // Untouched.
+                super::PersonSave {
+                    id: Some(josh.id),
+                    name: "Josh".into(),
+                    description: None,
+                },
+                // Corrected, and described.
+                super::PersonSave {
+                    id: Some(typo.id),
+                    name: "Ash".into(),
+                    description: Some("the other card".into()),
+                },
+                // Added on screen.
+                super::PersonSave {
+                    id: None,
+                    name: "Guest".into(),
+                    description: None,
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+        let mut people = Person::all().exec(&mut db).await.unwrap();
+        people.sort_by(|a, b| a.name.cmp(&b.name));
+        let got: Vec<_> = people
+            .iter()
+            .map(|p| (p.name.as_str(), p.description.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Ash", Some("the other card")),
+                ("Guest", None),
+                ("Josh", None),
+            ]
+        );
+        // Renaming edits the row rather than replacing it, so anything charged
+        // to them stays charged to them.
+        assert_eq!(people[0].id, typo.id);
+    }
+
+    /// Assignments survive a save, and dropping someone hands their items back
+    /// rather than leaving them pointed at a person who no longer exists.
+    #[tokio::test]
+    async fn removing_a_person_unassigns_their_items() {
+        use crate::server::models::Person;
+
+        let mut db = crate::server::db::connect_url("sqlite::memory:")
+            .await
+            .unwrap();
+
+        let josh = toasty::create!(Person { name: "Josh" })
+            .exec(&mut db)
+            .await
+            .unwrap();
+        let ash = toasty::create!(Person {
+            name: "Ash",
+            description: "the other card",
+        })
+        .exec(&mut db)
+        .await
+        .unwrap();
+
+        let receipt = toasty::create!(Receipt {
+            purchased_on: jiff::civil::date(2026, 7, 20),
+            merchant: "Costco",
+            total: dec("30.00"),
+            currency: "USD",
+            image_path: "a.jpg",
+            line_items: [
+                { description: "Milk", total: dec("10.00"), position: 0 },
+                { description: "Dog food", total: dec("20.00"), position: 1 },
+            ],
+        })
+        .exec(&mut db)
+        .await
+        .unwrap();
+
+        let before = receipt.line_items().exec(&mut db).await.unwrap();
+        let milk = before.iter().find(|i| i.description == "Milk").unwrap();
+        let food = before.iter().find(|i| i.description == "Dog food").unwrap();
+
+        super::save_receipt(
+            &mut db,
+            receipt.id,
+            super::ReceiptSave {
+                merchant: "Costco".into(),
+                purchased_on: jiff::civil::date(2026, 7, 20),
+                currency: "USD".into(),
+                subtotal: None,
+                tax: None,
+                total: Some(dec("30.00")),
+                items: vec![
+                    super::ItemSave {
+                        id: Some(milk.id),
+                        description: "Milk".into(),
+                        total: dec("10.00"),
+                        person_id: Some(josh.id),
+                    },
+                    super::ItemSave {
+                        id: Some(food.id),
+                        description: "Dog food".into(),
+                        total: dec("20.00"),
+                        person_id: Some(ash.id),
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        let assigned = |items: &[crate::server::models::LineItem], description: &str| {
+            items
+                .iter()
+                .find(|i| i.description == description)
+                .unwrap()
+                .person_id
+        };
+
+        let items = receipt.line_items().exec(&mut db).await.unwrap();
+        assert_eq!(assigned(&items, "Milk"), Some(josh.id));
+        assert_eq!(assigned(&items, "Dog food"), Some(ash.id));
+
+        // Josh is absent from the save, so he goes.
+        super::save_people(
+            &mut db,
+            vec![super::PersonSave {
+                id: Some(ash.id),
+                name: "Ash".into(),
+                description: None,
+            }],
+        )
+        .await
+        .unwrap();
+
+        let items = receipt.line_items().exec(&mut db).await.unwrap();
+        assert_eq!(assigned(&items, "Milk"), None, "back to unassigned");
+        assert_eq!(assigned(&items, "Dog food"), Some(ash.id), "left alone");
+        assert!(Person::get_by_id(&mut db, &josh.id).await.is_err());
     }
 
     /// The CSV must describe the same period the view does.

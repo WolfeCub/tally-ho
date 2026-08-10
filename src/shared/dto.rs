@@ -32,6 +32,28 @@ pub struct LineItem {
     pub total: Decimal,
     pub position: i64,
     pub edited: bool,
+    /// Who this is charged to. `None` is unassigned, which is also what a person
+    /// being removed leaves behind.
+    pub person_id: Option<Uuid>,
+}
+
+/// Someone line items can be charged to, as the settings screen manages them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Person {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+/// One person as the settings screen left them. The screen sends everyone it
+/// ended up with, so anyone missing from the list was removed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonSave {
+    /// `None` for someone added on screen and not yet written.
+    pub id: Option<Uuid>,
+    pub name: String,
+    /// Empty means no description. Trimmed on the way in.
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +98,7 @@ pub struct LineItemSave {
     pub id: Option<Uuid>,
     pub description: String,
     pub total: String,
+    pub person_id: Option<Uuid>,
 }
 
 pub fn line_item_sum(items: &[LineItem]) -> Decimal {
@@ -466,6 +489,7 @@ mod tests {
             total: dec(total),
             position: 0,
             edited: false,
+            person_id: None,
         }
     }
 

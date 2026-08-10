@@ -16,7 +16,7 @@ pub fn ReceiptListPage() -> impl IntoView {
         }>
             {move || Suspend::new(async move {
                 match receipts.await {
-                    Err(e) => view! { <p class="text-danger">{format!("{e}")}</p> }.into_any(),
+                    Err(e) => view! { <p class="text-danger">{e.to_string()}</p> }.into_any(),
                     Ok(rows) if rows.is_empty() => {
                         view! { <p class="text-muted">"No receipts yet."</p> }.into_any()
                     }

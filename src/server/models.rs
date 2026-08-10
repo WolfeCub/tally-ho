@@ -65,6 +65,23 @@ pub struct Receipt {
     pub line_items: toasty::Deferred<Vec<LineItem>>,
 }
 
+/// Someone a line item can be charged to.
+///
+/// Reconciling a card statement means splitting it between the people who share
+/// it, so who bought what has to be recorded item by item.
+#[derive(Debug, toasty::Model)]
+pub struct Person {
+    #[key]
+    #[auto]
+    pub id: Uuid,
+
+    pub name: String,
+    pub description: Option<String>,
+
+    #[default(jiff::Timestamp::now())]
+    pub created_at: jiff::Timestamp,
+}
+
 /// Extraction runs in the background (a 7B vision model takes far too long to
 /// block an HTTP response on), so a receipt's progress has to be persisted for
 /// the client to poll.
@@ -91,6 +108,11 @@ pub struct LineItem {
     pub quantity: Option<Decimal>,
     pub unit_price: Option<Decimal>,
     pub total: Decimal,
+
+    /// Who this one is charged to, `None` until somebody says. Indexed because
+    /// reconciliation asks "what did this person buy in this period".
+    #[index]
+    pub person_id: Option<Uuid>,
 
     /// Preserves the order printed on the receipt.
     pub position: i64,

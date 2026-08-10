@@ -24,6 +24,15 @@ pub fn to_dto_line_item(item: &models::LineItem) -> dto::LineItem {
         total: item.total,
         position: item.position,
         edited: item.edited,
+        person_id: item.person_id,
+    }
+}
+
+pub fn to_dto_person(person: &models::Person) -> dto::Person {
+    dto::Person {
+        id: person.id,
+        name: person.name.clone(),
+        description: person.description.clone(),
     }
 }
 

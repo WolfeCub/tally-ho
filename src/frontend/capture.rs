@@ -4,7 +4,7 @@ use leptos::prelude::*;
 use leptos::web_sys::{FormData, SubmitEvent};
 
 use crate::frontend::components::{
-    BUTTON, CameraIcon, Spinner, StepBar, TAP, Verdict, form_element,
+    AS_BUTTON, BUTTON, CameraIcon, Spinner, StepBar, Verdict, form_element,
 };
 use crate::shared::api::{receipt_status, upload_receipt};
 use crate::shared::dto::ExtractionStatus;
@@ -158,7 +158,7 @@ pub fn CapturePage() -> impl IntoView {
             <button
                 type="submit"
                 disabled=move || !chosen.get() || working()
-                class=format!("{BUTTON} {TAP} font-medium disabled:opacity-40")
+                class=format!("{BUTTON} font-medium")
             >
                 "Upload"
             </button>
@@ -170,58 +170,70 @@ pub fn CapturePage() -> impl IntoView {
                 stage
                     .get()
                     .map(|stage| {
-                        let failed = stage == Stage::Failed;
-                        let edge = if failed { "border-danger" } else { "border-edge" };
-                        // A failed upload has a reason worth reading. A failed
-                        // extraction doesn't — the receipt is there to fill in.
-                        let reason = upload.value().get().and_then(|r| r.err());
                         view! {
-                            <div class=format!("rounded-xl border {edge} bg-surface p-4")>
-                                <div class="flex items-start gap-3">
-                                    {if stage.working() {
-                                        view! { <Spinner class="mt-0.5" /> }.into_any()
-                                    } else {
-                                        view! { <Verdict ok=!failed class="mt-0.5" /> }.into_any()
-                                    }}
-                                    <div class="min-w-0 flex-1">
-                                        <p class=if failed {
-                                            "font-medium text-danger"
-                                        } else {
-                                            "font-medium"
-                                        }>{stage.heading()}</p>
-                                        <p class="mt-0.5 text-sm text-muted">
-                                            {reason
-                                                .map(|e| e.to_string())
-                                                .unwrap_or_else(|| stage.detail().to_string())}
-                                        </p>
-                                    </div>
-                                </div>
-
-                                <div class="mt-4">
-                                    <StepBar reached=stage.reached() of=3 bad=failed />
-                                </div>
-
-                                // Once there's a receipt and nothing left to wait
-                                // for, the only thing to do is go and look at it.
-                                {receipt_id
-                                    .get()
-                                    .filter(|_| !stage.working())
-                                    .map(|id| {
-                                        view! {
-                                            <a
-                                                href=format!("/receipt/{id}")
-                                                class=format!(
-                                                    "{BUTTON} {TAP} mt-4 flex items-center justify-center no-underline",
-                                                )
-                                            >
-                                                {if failed { "Enter it by hand" } else { "Review it" }}
-                                            </a>
-                                        }
-                                    })}
-                            </div>
+                            <Progress
+                                stage
+                                // A failed upload has a reason worth reading. A
+                                // failed extraction doesn't — the receipt is
+                                // there to fill in.
+                                reason=upload.value().get().and_then(|r| r.err()).map(|e| e.to_string())
+                                receipt_id=receipt_id.get().filter(|_| !stage.working())
+                            />
                         }
                     })
             }}
+        </div>
+    }
+}
+
+/// Where the upload has got to, and the way out once it stops moving.
+#[component]
+fn Progress(
+    stage: Stage,
+    reason: Option<String>,
+    /// `None` while there's still something to wait for.
+    receipt_id: Option<uuid::Uuid>,
+) -> impl IntoView {
+    let failed = stage == Stage::Failed;
+    let edge = if failed {
+        "border-danger"
+    } else {
+        "border-edge"
+    };
+
+    view! {
+        <div class=format!("rounded-xl border {edge} bg-surface p-4")>
+            <div class="flex items-start gap-3">
+                {if stage.working() {
+                    view! { <Spinner class="mt-0.5" /> }.into_any()
+                } else {
+                    view! { <Verdict ok=!failed class="mt-0.5" /> }.into_any()
+                }}
+                <div class="min-w-0 flex-1">
+                    <p class=if failed { "font-medium text-danger" } else { "font-medium" }>
+                        {stage.heading()}
+                    </p>
+                    <p class="mt-0.5 text-sm text-muted">
+                        {reason.unwrap_or_else(|| stage.detail().to_string())}
+                    </p>
+                </div>
+            </div>
+
+            <div class="mt-4">
+                <StepBar reached=stage.reached() of=3 bad=failed />
+            </div>
+
+            {receipt_id
+                .map(|id| {
+                    view! {
+                        <a
+                            href=format!("/receipt/{id}")
+                            class=format!("{BUTTON} {AS_BUTTON} mt-4")
+                        >
+                            {if failed { "Enter it by hand" } else { "Review it" }}
+                        </a>
+                    }
+                })}
         </div>
     }
 }

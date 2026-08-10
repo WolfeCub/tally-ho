@@ -1,6 +1,11 @@
 //! Three parts: [`shared`] is what both sides agree on, [`frontend`] is the UI,
 //! and [`server`] is everything that never leaves the machine.
 
+// A leptos view is one big nested type, and the review screen's is deep enough
+// that laying it out for the wasm build overflows the default. Only the release
+// build gets that far, so `cargo check` won't warn you.
+#![recursion_limit = "256"]
+
 pub mod frontend;
 pub mod shared;
 

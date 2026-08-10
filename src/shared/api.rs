@@ -139,6 +139,7 @@ fn parse_save(save: dto::ReceiptSave) -> Result<crate::server::query::ReceiptSav
             id: item.id,
             description,
             total: optional_money("the amount", &item.total)?.unwrap_or_default(),
+            person_id: item.person_id,
         });
     }
 
@@ -151,6 +152,65 @@ fn parse_save(save: dto::ReceiptSave) -> Result<crate::server::query::ReceiptSav
         total: optional_money("the total", &save.total)?,
         items,
     })
+}
+
+/// Everyone a line item can be charged to, by name.
+#[server]
+pub async fn list_people() -> Result<Vec<dto::Person>, ServerFnError> {
+    use crate::server::models::Person;
+    use crate::server::state::AppState;
+
+    let state = expect_context::<AppState>();
+    let mut db = state.db.clone();
+
+    let people = Person::all()
+        .order_by(Person::fields().name().asc())
+        .exec(&mut db)
+        .await
+        .map_err(|e| ServerFnError::new(format!("could not load people: {e}")))?;
+
+    Ok(people
+        .iter()
+        .map(crate::server::mappers::to_dto_person)
+        .collect())
+}
+
+/// Applies the settings screen: everyone it ended up with, in one write.
+///
+/// Anybody missing from the list is removed, and whatever was charged to them
+/// goes back to unassigned.
+#[server]
+pub async fn save_people(people: Vec<dto::PersonSave>) -> Result<(), ServerFnError> {
+    use crate::server::query::PersonSave;
+    use crate::server::state::AppState;
+
+    let mut parsed = Vec::with_capacity(people.len());
+    for person in people {
+        let name = person.name.trim();
+        // A row added and then left alone is dropped rather than complained about.
+        if name.is_empty() && person.description.trim().is_empty() {
+            continue;
+        }
+        if name.is_empty() {
+            return Err(ServerFnError::new("a person needs a name"));
+        }
+        parsed.push(PersonSave {
+            id: person.id,
+            name: name.to_string(),
+            // A blank box means no description, not an empty one.
+            description: {
+                let described = person.description.trim();
+                (!described.is_empty()).then(|| described.to_string())
+            },
+        });
+    }
+
+    let state = expect_context::<AppState>();
+    let mut db = state.db.clone();
+
+    crate::server::query::save_people(&mut db, parsed)
+        .await
+        .map_err(|e| ServerFnError::new(format!("could not save people: {e}")))
 }
 
 /// Throws away a receipt, its line items and its photo.
