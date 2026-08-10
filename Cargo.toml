@@ -1,6 +1,6 @@
 [package]
 name = "tally-ho"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [lib]
@@ -13,14 +13,14 @@ leptos_router = "0.8"
 leptos_meta = "0.8"
 
 # Shared: these appear in DTOs that cross the wire, so they compile for wasm32.
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
 jiff = { version = "0.2", features = ["serde"] }
 rust_decimal = { version = "1.41", features = ["serde"] }
 # Currency symbols and minor units for display.
 iso_currency = "0.5"
 # No `v4`/`v7`: the client only parses ids, and those need a wasm randomness
 # source.
-uuid = { version = "1", features = ["serde"] }
+uuid = { version = "1.24", features = ["serde"] }
 
 # Server-only, hence `optional` + the `ssr` feature below. Most of these will not
 # build for wasm32 at all.
@@ -28,10 +28,11 @@ toasty = { version = "0.9", features = ["sqlite", "jiff", "rust_decimal", "serde
 toasty-cli = { version = "0.9", optional = true }
 axum = { version = "0.8", optional = true }
 leptos_axum = { version = "0.8", optional = true }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs"], optional = true }
-serde_json = { version = "1", optional = true }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "fs"], optional = true }
+serde_json = { version = "1.0", optional = true }
+csv = { version = "1.3", optional = true }
 async-trait = { version = "0.1", optional = true }
-anyhow = { version = "1", optional = true }
+anyhow = { version = "1.0", optional = true }
 thiserror = { version = "2", optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
@@ -64,6 +65,7 @@ ssr = [
     "dep:leptos_axum",
     "dep:tokio",
     "dep:serde_json",
+    "dep:csv",
     "dep:async-trait",
     "dep:anyhow",
     "dep:thiserror",

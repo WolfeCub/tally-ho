@@ -30,9 +30,9 @@ pub struct Receipt {
     /// Every real receipt has a total, but extraction can fail to read one, and
     /// the row still has to exist so the image is stored and a human can fix
     /// it. Defaulting to `0` here would let an unreadable receipt silently
-    /// under-report a statement period, which is the exact failure this app
-    /// exists to prevent. The real-world invariant is enforced at review time,
-    /// not by the column type. See [`crate::shared::dto::PeriodTotal`].
+    /// under-report a statement, which is the exact failure this app exists to
+    /// prevent. The real-world invariant is enforced at review time, not by the
+    /// column type: a receipt with no total can't be matched to a charge.
     pub total: Option<Decimal>,
     pub currency: String,
 
@@ -80,6 +80,77 @@ pub struct Person {
 
     #[default(jiff::Timestamp::now())]
     pub created_at: jiff::Timestamp,
+}
+
+/// One uploaded credit-card statement, the thing receipts get reconciled
+/// against.
+///
+/// Stored rather than held in the browser because resolving a charge can mean
+/// photographing a receipt, waiting for the model, and correcting it on the
+/// review screen — work that outlives any page.
+#[derive(Debug, toasty::Model)]
+pub struct Statement {
+    #[key]
+    #[auto]
+    pub id: Uuid,
+
+    /// The uploaded filename, so a list of these is recognizable.
+    pub label: String,
+    /// ISO code every charge on it is in. Matching never crosses currencies: a
+    /// CAD 45.00 receipt is not a USD 45.00 charge.
+    pub currency: String,
+
+    /// Earliest and latest charge on the file. Read off the rows rather than
+    /// asked for — the statement already knows its own period.
+    pub begins_on: jiff::civil::Date,
+    pub ends_on: jiff::civil::Date,
+
+    #[default(jiff::Timestamp::now())]
+    pub imported_at: jiff::Timestamp,
+
+    #[has_many]
+    pub charges: toasty::Deferred<Vec<Charge>>,
+}
+
+/// One line off a statement. A payment or refund is a negative charge.
+#[derive(Debug, toasty::Model)]
+pub struct Charge {
+    #[key]
+    #[auto]
+    pub id: Uuid,
+
+    #[index]
+    pub statement_id: Uuid,
+    #[belongs_to]
+    pub statement: toasty::Deferred<Statement>,
+
+    /// Whichever date the file carried — the transaction date where there is
+    /// one, since that is the day the receipt was printed.
+    pub charged_on: jiff::civil::Date,
+    pub description: String,
+    /// Positive for a purchase, negative for a credit. Normalized on import:
+    /// issuers disagree about which way round they write it.
+    pub amount: Decimal,
+    /// Row order in the file, so the screen reads like the statement.
+    pub position: i64,
+
+    /// The receipt this charge is accounted for by. Indexed because matching
+    /// asks whether a receipt is already spoken for.
+    #[index]
+    pub receipt_id: Option<Uuid>,
+    /// Whether a human has agreed to the match. Matching fills [`Self::receipt_id`]
+    /// in by itself, which is a proposal and not an answer — an amount can match
+    /// the wrong receipt and every total still balances.
+    #[default(false)]
+    pub confirmed: bool,
+    /// Set when a charge is deliberately receiptless — a subscription, a fee.
+    /// Without it those never resolve and a statement can't be finished.
+    #[default(false)]
+    pub no_receipt: bool,
+    /// Whose a receiptless charge is; `None` splits it evenly. Read only when
+    /// [`Self::no_receipt`] is set — a matched receipt splits by its own items.
+    #[index]
+    pub person_id: Option<Uuid>,
 }
 
 /// Extraction runs in the background (a 7B vision model takes far too long to

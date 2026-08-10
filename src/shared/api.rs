@@ -4,7 +4,7 @@
 //! a function body rather than at module scope.
 
 use leptos::prelude::*;
-use leptos::server_fn::codec::{MultipartData, MultipartFormData};
+use leptos::server_fn::codec::{Json, MultipartData, MultipartFormData};
 use uuid::Uuid;
 
 use crate::shared::dto;
@@ -157,22 +157,14 @@ fn parse_save(save: dto::ReceiptSave) -> Result<crate::server::query::ReceiptSav
 /// Everyone a line item can be charged to, by name.
 #[server]
 pub async fn list_people() -> Result<Vec<dto::Person>, ServerFnError> {
-    use crate::server::models::Person;
     use crate::server::state::AppState;
 
     let state = expect_context::<AppState>();
     let mut db = state.db.clone();
 
-    let people = Person::all()
-        .order_by(Person::fields().name().asc())
-        .exec(&mut db)
+    crate::server::query::list_people(&mut db)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not load people: {e}")))?;
-
-    Ok(people
-        .iter()
-        .map(crate::server::mappers::to_dto_person)
-        .collect())
+        .map_err(|e| ServerFnError::new(format!("could not load people: {e}")))
 }
 
 /// Applies the settings screen: everyone it ended up with, in one write.
@@ -216,7 +208,7 @@ pub async fn save_people(people: Vec<dto::PersonSave>) -> Result<(), ServerFnErr
 /// Throws away a receipt, its line items and its photo.
 ///
 /// For the duplicate upload and the unreadable photo. Without it a bad receipt
-/// sits in the list forever and quietly pads the period total.
+/// sits in the list forever and can be matched to a charge it never paid for.
 #[server]
 pub async fn delete_receipt(id: Uuid) -> Result<(), ServerFnError> {
     use crate::server::state::AppState;
@@ -240,9 +232,8 @@ pub async fn delete_receipt(id: Uuid) -> Result<(), ServerFnError> {
 
 /// Records that a human has checked this receipt against the photo.
 ///
-/// Refuses while the receipt has no total: marking it reviewed is a claim the
-/// period view relies on, and a reviewed receipt with no total would silently
-/// under-report.
+/// Refuses while the receipt has no total: reconciliation matches on the total, so
+/// a reviewed receipt without one is a claim that nothing can act on.
 #[server]
 pub async fn mark_reviewed(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
     use crate::server::models::Receipt;
@@ -288,33 +279,134 @@ async fn load_receipt(db: &mut toasty::Db, id: Uuid) -> Result<dto::Receipt, Ser
     Ok(crate::server::mappers::to_dto_receipt(&receipt, &items))
 }
 
-/// The reconciliation view: every receipt in a statement period, with a total.
+/// Reads an uploaded statement CSV, writes its charges, and proposes a receipt
+/// for the ones that are obvious.
 ///
-/// Both ends are optional. Omitting them asks for the default period (the
-/// previous whole month) — the client has no clock, and the returned
-/// [`dto::PeriodSummary`] carries the dates that were actually used, so the date
-/// pickers can be populated from the first response.
+/// Returns the statement to reconcile, plus what the sniffer made of the file —
+/// which columns it used and any row it couldn't read. Those are shown rather
+/// than logged: picking the wrong column would otherwise export a total that
+/// quietly doesn't match the card.
+#[server(input = MultipartFormData)]
+pub async fn import_statement(data: MultipartData) -> Result<dto::Imported, ServerFnError> {
+    use crate::server::state::AppState;
+    use crate::server::statements;
+
+    let state = expect_context::<AppState>();
+    let mut data = data.into_inner().expect("multipart data on the server");
+
+    let mut label = String::new();
+    let mut currency = String::new();
+    let mut bytes: Vec<u8> = Vec::new();
+    while let Ok(Some(mut field)) = data.next_field().await {
+        match field.name() {
+            Some("statement") => {
+                label = field.file_name().unwrap_or("statement.csv").to_string();
+                while let Ok(Some(chunk)) = field.chunk().await {
+                    bytes.extend_from_slice(&chunk);
+                }
+            }
+            Some("currency") => currency = field.text().await.unwrap_or_default(),
+            // Anything else is ignored rather than trusted.
+            _ => continue,
+        }
+    }
+
+    if bytes.is_empty() {
+        return Err(ServerFnError::new("no file was uploaded"));
+    }
+
+    let parsed =
+        statements::parse::charges(&bytes).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let currency = match currency.trim() {
+        "" => "USD".to_string(),
+        typed => typed.to_uppercase(),
+    };
+
+    let mut db = state.db.clone();
+    let id = statements::import(&mut db, &label, &currency, &parsed)
+        .await
+        .map_err(|e| ServerFnError::new(format!("could not import the statement: {e}")))?;
+
+    Ok(dto::Imported {
+        id,
+        columns: [
+            parsed.layout.date.name,
+            parsed.layout.description.name,
+            parsed.layout.amount.name,
+        ],
+        charge_count: parsed.charges.len(),
+        skipped: parsed.skipped,
+    })
+}
+
+/// Every statement imported, newest first.
 #[server]
-pub async fn receipts_in_range(
-    from: Option<jiff::civil::Date>,
-    to: Option<jiff::civil::Date>,
-) -> Result<dto::PeriodSummary, ServerFnError> {
+pub async fn list_statements() -> Result<Vec<dto::StatementSummary>, ServerFnError> {
     use crate::server::state::AppState;
 
     let state = expect_context::<AppState>();
     let mut db = state.db.clone();
 
-    let (from, to) = crate::server::query::resolve_range(from, to);
-    let rows = crate::server::query::load_range(&mut db, from, to)
+    crate::server::statements::list(&mut db)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not load the period: {e}")))?;
+        .map_err(|e| ServerFnError::new(format!("could not load statements: {e}")))
+}
 
-    let summaries = rows
-        .iter()
-        .map(|(r, items)| crate::server::mappers::to_dto_summary(r, items))
-        .collect();
+/// One statement to reconcile: every charge, what accounts for it, and what it
+/// splits to.
+#[server]
+pub async fn get_statement(id: Uuid) -> Result<dto::Statement, ServerFnError> {
+    use crate::server::state::AppState;
 
-    Ok(dto::PeriodSummary::new(from, to, summaries))
+    let state = expect_context::<AppState>();
+    let mut db = state.db.clone();
+
+    crate::server::statements::load(&mut db, id)
+        .await
+        .map_err(|e| ServerFnError::new(format!("could not load the statement: {e}")))
+}
+
+/// Records what a human decided about one charge.
+///
+/// JSON, not the default form encoding: "split evenly" is `NoReceipt` with a
+/// `person_id` of `None`, and urlencoding drops `None`, leaving the variant with
+/// no fields and the whole argument missing from the body.
+#[server(input = Json)]
+pub async fn resolve_charge(charge_id: Uuid, how: dto::Resolve) -> Result<(), ServerFnError> {
+    use crate::server::state::AppState;
+
+    let state = expect_context::<AppState>();
+    let mut db = state.db.clone();
+
+    crate::server::statements::resolve(&mut db, charge_id, how)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Receipts nothing accounts for yet, for picking one by hand.
+#[server]
+pub async fn spare_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, ServerFnError> {
+    use crate::server::state::AppState;
+
+    let state = expect_context::<AppState>();
+    let mut db = state.db.clone();
+
+    crate::server::statements::spare(&mut db, limit)
+        .await
+        .map_err(|e| ServerFnError::new(format!("could not load receipts: {e}")))
+}
+
+/// Throws away a statement and its charges. The receipts stay.
+#[server]
+pub async fn delete_statement(id: Uuid) -> Result<(), ServerFnError> {
+    use crate::server::state::AppState;
+
+    let state = expect_context::<AppState>();
+    let mut db = state.db.clone();
+
+    crate::server::statements::delete(&mut db, id)
+        .await
+        .map_err(|e| ServerFnError::new(format!("could not delete the statement: {e}")))
 }
 
 /// Reverse-chronological receipts, newest first, for the list tab.

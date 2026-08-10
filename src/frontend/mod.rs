@@ -1,15 +1,15 @@
 //! The UI. Rendered on the server first and hydrated in the browser, so all of
 //! it compiles for both targets.
 //!
-//! A module per screen — capture, receipts, review, period, settings — and the
-//! rest is bits more than one of them needs.
+//! A module per screen — capture, receipts, review, reconcile, settings — and
+//! the rest is bits more than one of them needs.
 
 mod actions;
 mod capture;
 mod components;
 mod money;
-mod period;
 mod receipts;
+mod reconcile;
 mod review;
 mod settings;
 mod text;
@@ -20,8 +20,8 @@ use leptos_router::components::{A, Route, Router, Routes};
 use leptos_router::path;
 
 use capture::CapturePage;
-use period::PeriodPage;
 use receipts::ReceiptListPage;
+use reconcile::{ReconcilePage, StatementsPage};
 use review::ReviewPage;
 use settings::SettingsPage;
 
@@ -70,7 +70,8 @@ pub fn App() -> impl IntoView {
                     <Route path=path!("/") view=CapturePage />
                     <Route path=path!("/receipts") view=ReceiptListPage />
                     <Route path=path!("/receipt/:id") view=ReviewPage />
-                    <Route path=path!("/period") view=PeriodPage />
+                    <Route path=path!("/reconcile") view=StatementsPage />
+                    <Route path=path!("/reconcile/:id") view=ReconcilePage />
                     <Route path=path!("/settings") view=SettingsPage />
                 </Routes>
             </main>
@@ -99,8 +100,8 @@ fn NavBar() -> impl IntoView {
                 <A href="/receipts" attr:class=link>
                     "Receipts"
                 </A>
-                <A href="/period" attr:class=link>
-                    "Period"
+                <A href="/reconcile" attr:class=link>
+                    "Reconcile"
                 </A>
                 <A href="/settings" attr:class=link>
                     "Settings"

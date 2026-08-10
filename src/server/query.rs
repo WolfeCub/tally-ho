@@ -1,20 +1,7 @@
-//! Queries that touch more than one row: the statement period, which both the
-//! period view and the CSV export go through, and throwing a receipt away.
+//! Queries that touch more than one row: the writes, and the date range
+//! matching searches through.
 
 use crate::server::models;
-use crate::shared::dto;
-
-/// Fills in either end of a requested statement period.
-///
-/// Both ends are optional so the client can ask for "the usual" without owning a
-/// clock, and the response echoes back which dates were actually used.
-pub fn resolve_range(
-    from: Option<jiff::civil::Date>,
-    to: Option<jiff::civil::Date>,
-) -> (jiff::civil::Date, jiff::civil::Date) {
-    let (default_from, default_to) = dto::last_full_month(jiff::Zoned::now().date());
-    (from.unwrap_or(default_from), to.unwrap_or(default_to))
-}
 
 /// Receipts purchased in an inclusive date range, each with its line items.
 ///
@@ -145,6 +132,17 @@ pub async fn save_receipt(
     tx.commit().await
 }
 
+/// Everyone a line item can be charged to, by name.
+pub async fn list_people(db: &mut toasty::Db) -> toasty::Result<Vec<crate::shared::dto::Person>> {
+    Ok(models::Person::all()
+        .order_by(models::Person::fields().name().asc())
+        .exec(db)
+        .await?
+        .iter()
+        .map(crate::server::mappers::to_dto_person)
+        .collect())
+}
+
 /// Deletes a receipt and its line items, handing back the image path so the
 /// caller can remove the photo once the rows are actually gone.
 ///
@@ -158,6 +156,21 @@ pub async fn delete_receipt(db: &mut toasty::Db, id: uuid::Uuid) -> toasty::Resu
     for item in receipt.line_items().exec(&mut tx).await? {
         item.delete().exec(&mut tx).await?;
     }
+
+    // A charge pointing at a receipt that isn't there would look settled against
+    // nothing, so it goes back to unresolved in the same transaction.
+    for mut charge in models::Charge::filter(models::Charge::fields().receipt_id().eq(id))
+        .exec(&mut tx)
+        .await?
+    {
+        toasty::update!(charge {
+            receipt_id: None,
+            confirmed: false
+        })
+        .exec(&mut tx)
+        .await?;
+    }
+
     receipt.delete().exec(&mut tx).await?;
 
     tx.commit().await?;
@@ -233,7 +246,6 @@ pub async fn save_people(db: &mut toasty::Db, people: Vec<PersonSave>) -> toasty
 mod tests {
     use crate::server::mappers;
     use crate::server::models::Receipt;
-    use crate::shared::dto;
     use rust_decimal::Decimal;
     use std::str::FromStr;
 
@@ -241,10 +253,10 @@ mod tests {
         Decimal::from_str(s).unwrap()
     }
 
-    /// Exercises the range query against real SQLite: the ordering, the line-item
-    /// fetch, and the fold into a period figure.
+    /// Exercises the range matching searches through, against real SQLite: the
+    /// ordering, the line-item fetch, and the problems that come with them.
     #[tokio::test]
-    async fn a_period_loads_in_order_with_its_items_and_totals() {
+    async fn a_date_range_loads_in_order_with_its_items() {
         let mut db = crate::server::db::connect_url("sqlite::memory:")
             .await
             .unwrap();
@@ -268,7 +280,7 @@ mod tests {
         .await
         .unwrap();
 
-        // No total: must make the period partial rather than contributing zero.
+        // No total, so nothing can match it until a human fixes it.
         toasty::create!(Receipt {
             purchased_on: jiff::civil::date(2026, 7, 2),
             merchant: "Unreadable",
@@ -279,7 +291,7 @@ mod tests {
         .await
         .unwrap();
 
-        // Outside the period.
+        // Outside the range.
         toasty::create!(Receipt {
             purchased_on: jiff::civil::date(2026, 8, 1),
             merchant: "Next month",
@@ -300,31 +312,19 @@ mod tests {
         assert_eq!(rows[0].1.len(), 0);
         assert_eq!(rows[1].1.len(), 2);
 
-        let summaries = rows
+        let summaries: Vec<_> = rows
             .iter()
             .map(|(r, items)| mappers::to_dto_summary(r, items))
             .collect();
-        let period = dto::PeriodSummary::new(from, to, summaries);
-
-        assert_eq!(period.totals.len(), 1, "both receipts are USD");
-        assert_eq!(period.totals[0].currency, "USD");
-        assert_eq!(period.totals[0].total.known(), dec("32.00"));
-        assert_eq!(
-            period.totals[0].total.missing(),
-            1,
-            "the unreadable receipt"
-        );
-        assert!(!period.totals[0].total.is_complete());
 
         // Costco balances (30 + 2 = 32, items = 30); the other is only missing a
         // total, so exactly one problem each way.
         assert!(
-            period.receipts[1].problems.is_empty(),
+            summaries[1].problems.is_empty(),
             "{:?}",
-            period.receipts[1].problems
+            summaries[1].problems
         );
-        assert_eq!(period.receipts[0].problems.len(), 1);
-        assert_eq!(period.needing_attention(), 1);
+        assert_eq!(summaries[0].problems.len(), 1);
     }
 
     /// The line items are the part that can be left behind: nothing cascades,
@@ -654,42 +654,5 @@ mod tests {
         assert_eq!(assigned(&items, "Milk"), None, "back to unassigned");
         assert_eq!(assigned(&items, "Dog food"), Some(ash.id), "left alone");
         assert!(Person::get_by_id(&mut db, &josh.id).await.is_err());
-    }
-
-    /// The CSV must describe the same period the view does.
-    #[tokio::test]
-    async fn the_csv_covers_the_same_receipts_as_the_period() {
-        let mut db = crate::server::db::connect_url("sqlite::memory:")
-            .await
-            .unwrap();
-
-        toasty::create!(Receipt {
-            purchased_on: jiff::civil::date(2026, 7, 5),
-            merchant: "Shop",
-            total: dec("12.50"),
-            currency: "USD",
-            image_path: "a.jpg",
-            line_items: [{ description: "Thing", total: dec("12.50"), position: 0 }],
-        })
-        .exec(&mut db)
-        .await
-        .unwrap();
-
-        let rows = super::load_range(
-            &mut db,
-            jiff::civil::date(2026, 7, 1),
-            jiff::civil::date(2026, 7, 31),
-        )
-        .await
-        .unwrap();
-        let receipts: Vec<_> = rows
-            .iter()
-            .map(|(r, items)| mappers::to_dto_receipt(r, items))
-            .collect();
-
-        let csv = dto::receipts_to_csv(&receipts);
-        let lines: Vec<_> = csv.lines().collect();
-        assert_eq!(lines.len(), 2, "header + one item: {csv}");
-        assert!(lines[1].starts_with("2026-07-05,Shop,12.50,USD,Thing,12.50,no,"));
     }
 }

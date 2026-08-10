@@ -1,4 +1,4 @@
-//! The receipt list, shared by the list tab and the period view.
+//! The receipt list.
 
 use leptos::prelude::*;
 

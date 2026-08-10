@@ -44,14 +44,7 @@ async fn receipt_image(
         .into_response()
 }
 
-#[cfg(feature = "ssr")]
-#[derive(serde::Deserialize)]
-struct ExportParams {
-    from: Option<String>,
-    to: Option<String>,
-}
-
-/// Exports a statement period as CSV.
+/// Exports a reconciled statement as CSV.
 ///
 /// A plain route rather than a server function: this way it is an ordinary link,
 /// which on a phone hands the file straight to the OS share sheet with a real
@@ -60,56 +53,34 @@ struct ExportParams {
 #[cfg(feature = "ssr")]
 async fn export_csv(
     axum::Extension(state): axum::Extension<tally_ho::server::state::AppState>,
-    axum::extract::Query(params): axum::extract::Query<ExportParams>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
 ) -> axum::response::Response {
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
 
-    // A malformed date is rejected rather than defaulted: silently exporting a
-    // different period than the one asked for is the worst possible outcome for
-    // a file someone is about to reconcile against a statement.
-    fn parse(value: Option<String>) -> Result<Option<jiff::civil::Date>, String> {
-        match value.as_deref().map(str::trim) {
-            None | Some("") => Ok(None),
-            Some(s) => s
-                .parse::<jiff::civil::Date>()
-                .map(Some)
-                .map_err(|_| format!("{s:?} is not a date (expected YYYY-MM-DD)")),
-        }
-    }
-
-    let (from, to) = match (parse(params.from), parse(params.to)) {
-        (Ok(from), Ok(to)) => tally_ho::server::query::resolve_range(from, to),
-        (Err(e), _) | (_, Err(e)) => return (StatusCode::BAD_REQUEST, e).into_response(),
-    };
-
     let mut db = state.db.clone();
-    let rows = match tally_ho::server::query::load_range(&mut db, from, to).await {
-        Ok(rows) => rows,
+    let statement = match tally_ho::server::statements::load(&mut db, id).await {
+        Ok(statement) => statement,
         Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("could not load the period: {e}"),
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, format!("no such statement: {e}")).into_response();
         }
     };
 
-    let receipts: Vec<_> = rows
-        .iter()
-        .map(|(r, items)| tally_ho::server::mappers::to_dto_receipt(r, items))
-        .collect();
-    let csv = tally_ho::shared::dto::receipts_to_csv(&receipts);
+    let csv = tally_ho::shared::export::statement_to_csv(&statement);
+    let name = format!(
+        "tally-ho-{}-to-{}.csv",
+        statement.begins_on, statement.ends_on
+    );
 
     (
         [
             (header::CONTENT_TYPE, "text/csv; charset=utf-8".to_string()),
             (
                 header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"tally-ho-{from}-to-{to}.csv\""),
+                format!("attachment; filename=\"{name}\""),
             ),
-            // The underlying receipts are editable, so this must never be served
-            // from a cache.
+            // Every figure in here changes as charges get resolved, so this must
+            // never be served from a cache.
             (header::CACHE_CONTROL, "no-store".to_string()),
         ],
         csv,
@@ -147,7 +118,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/receipt-image/{id}", get(receipt_image))
-        .route("/export.csv", get(export_csv))
+        .route("/statement/{id}/export.csv", get(export_csv))
         // `_with_context` is what makes `expect_context::<AppState>()` work
         // inside server functions.
         .leptos_routes_with_context(

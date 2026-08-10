@@ -61,7 +61,7 @@ pub fn to_dto_summary(
     items: &[models::LineItem],
 ) -> dto::ReceiptSummary {
     // Converts the items only to run the shared problem checks over them; they
-    // are not sent, since the period list shows the conclusion, not the rows.
+    // are not sent, since a list shows the conclusion, not the rows.
     let converted: Vec<_> = items.iter().map(to_dto_line_item).collect();
 
     dto::ReceiptSummary {
@@ -73,6 +73,11 @@ pub fn to_dto_summary(
         status: to_dto_status(&receipt.status),
         item_count: items.len(),
         reviewed: receipt.reviewed_at.is_some(),
-        problems: dto::problems_of(receipt.subtotal, receipt.tax, receipt.total, &converted),
+        problems: crate::shared::problems::problems_of(
+            receipt.subtotal,
+            receipt.tax,
+            receipt.total,
+            &converted,
+        ),
     }
 }

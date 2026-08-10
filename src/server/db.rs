@@ -217,7 +217,7 @@ mod tests {
     async fn date_range_filter_is_inclusive_at_both_ends() {
         let mut db = test_db().await;
 
-        // One day either side of the period, plus both boundaries and a day in
+        // One day either side of the range, plus both boundaries and a day in
         // the middle.
         let fixtures = [
             ((2026, 6, 14), "day-before"),

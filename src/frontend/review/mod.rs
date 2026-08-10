@@ -35,6 +35,17 @@ pub fn ReviewPage() -> impl IntoView {
             .and_then(|s| Uuid::parse_str(&s).ok())
     };
 
+    // Set when you got here from a statement, so there's a way back to one
+    // half-reconciled. A path only — a query parameter shouldn't be able to point
+    // the link anywhere else.
+    let query = leptos_router::hooks::use_query_map();
+    let back = move || {
+        query
+            .read()
+            .get("back")
+            .filter(|href| href.starts_with('/'))
+    };
+
     // Both in one resource: without the people list the assignment dropdowns
     // would quietly come up empty, which reads as "nobody to charge this to".
     let receipt = Resource::new(id, |id| async move {
@@ -45,6 +56,16 @@ pub fn ReviewPage() -> impl IntoView {
     });
 
     view! {
+        {move || {
+            back()
+                .map(|href| {
+                    view! {
+                        <a href=href class="mb-3 inline-block text-sm">
+                            "← Back to the statement"
+                        </a>
+                    }
+                })
+        }}
         // Transition rather than Suspense: saving refetches, and a fallback
         // would blank the whole screen every time.
         <Transition fallback=|| {

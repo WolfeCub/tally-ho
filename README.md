@@ -5,7 +5,8 @@
 <h1 align="center">tally-ho</h1>
 
 Photograph a receipt, a local vision model pulls the line items out of it, then
-total up a credit-card statement period and export it as CSV.
+upload your card statement and reconcile it charge by charge — every one matched
+to a receipt or explained — and export who owes what as CSV.
 
 Leptos and axum, SQLite through toasty, extraction via Ollama.
 
