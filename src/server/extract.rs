@@ -52,6 +52,22 @@ const DEFAULT_OCR_MODEL: &str = "glm-ocr:q8_0";
 /// is double it — a long grocery receipt is a much longer transcript.
 const DEFAULT_OCR_CONTEXT: u32 = 8192;
 
+/// Ollama's `num_gpu` for the OCR model — every layer, overriding Ollama's own
+/// placement estimate. It sizes a vision model's compute graph against the
+/// largest image it might be sent, and at [`DEFAULT_MAX_EDGE`] that projection
+/// exceeds what the 12B model leaves free, so it splits the OCR model across
+/// CPU and GPU instead. Measured on a 12 GB 3060 with both models resident: the
+/// split put 1146 MiB of a ~2.0 GB model on the GPU while 2740 MiB sat unused,
+/// so what was short was the projection, not the card. The OCR model reloads on
+/// every keep-alive expiry, so that arithmetic is re-run constantly rather than
+/// being one unlucky load.
+///
+/// 99 is the conventional "all of them" — Ollama clamps it to the layer count.
+/// The tradeoff is that this removes the safety net: if the GPU genuinely
+/// hasn't room, the runner now fails to load rather than quietly falling back
+/// to a slow CPU split.
+const OCR_GPU_LAYERS: u32 = 99;
+
 /// Downscale only, and about cost rather than accuracy — the OCR model reads this
 /// receipt anywhere from 1024 to 5096 pixels. Past this it's just tiled into more
 /// pieces: 2.1s here against 10s at native, for the same text. Below it the
@@ -288,7 +304,10 @@ impl OllamaExtractor {
                 .temperature(0.0)
                 .max_tokens(MAX_OUTPUT_TOKENS)
                 // rig lifts `num_ctx` into Ollama's `options`.
-                .additional_params(serde_json::json!({ "num_ctx": config.ocr_context }))
+                .additional_params(serde_json::json!({
+                    "num_ctx": config.ocr_context,
+                    "num_gpu": OCR_GPU_LAYERS,
+                }))
                 .build()
         });
 
