@@ -245,7 +245,7 @@ pub async fn save_people(db: &mut toasty::Db, people: Vec<PersonSave>) -> toasty
 #[cfg(test)]
 mod tests {
     use crate::server::mappers;
-    use crate::server::models::Receipt;
+    use crate::server::models::{ExtractionStatus, Receipt};
     use rust_decimal::Decimal;
     use std::str::FromStr;
 
@@ -262,10 +262,13 @@ mod tests {
             .unwrap();
 
         // Inserted newest-first so a passing order assertion means `order_by`
-        // did the work, not insertion order.
+        // did the work, not insertion order. Both are marked read, because the
+        // problem checks are held back until a receipt has been: the default
+        // status is `Pending`, which reports nothing by design.
         toasty::create!(Receipt {
             purchased_on: jiff::civil::date(2026, 7, 20),
             merchant: "Costco",
+            status: ExtractionStatus::Done,
             subtotal: dec("30.00"),
             tax: dec("2.00"),
             total: dec("32.00"),
@@ -280,10 +283,12 @@ mod tests {
         .await
         .unwrap();
 
-        // No total, so nothing can match it until a human fixes it.
+        // Read, but no total came out of it, so nothing can match it until a
+        // human fixes it — one problem.
         toasty::create!(Receipt {
             purchased_on: jiff::civil::date(2026, 7, 2),
             merchant: "Unreadable",
+            status: ExtractionStatus::Done,
             currency: "USD",
             image_path: "a.jpg",
         })

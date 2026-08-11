@@ -6,6 +6,7 @@ use leptos::web_sys::{FormData, SubmitEvent};
 use crate::frontend::components::{
     AS_BUTTON, BUTTON, CameraIcon, Spinner, StepBar, Verdict, form_element,
 };
+use crate::frontend::poll::poll_while;
 use crate::shared::api::{receipt_status, upload_receipt};
 use crate::shared::dto::ExtractionStatus;
 
@@ -98,23 +99,9 @@ pub fn CapturePage() -> impl IntoView {
 
     let working = move || stage.get().is_some_and(Stage::working);
 
-    Effect::new(move |prev_handle: Option<Option<IntervalHandle>>| {
-        // Clear any previous timer before starting another.
-        if let Some(Some(handle)) = prev_handle {
-            handle.clear();
-        }
-        // Stop polling once the outcome is settled, rather than hammering the
-        // server for the life of the page.
-        if !working() {
-            return None;
-        }
-        receipt_id.get()?;
-        set_interval_with_handle(
-            move || tick.update(|t| *t += 1),
-            std::time::Duration::from_millis(1500),
-        )
-        .ok()
-    });
+    // Nothing to poll about before there is a receipt, and nothing to learn once
+    // the outcome is settled.
+    poll_while(tick, move || working() && receipt_id.get().is_some());
 
     view! {
         <h1 class="mb-4 text-xl font-semibold">"Capture"</h1>

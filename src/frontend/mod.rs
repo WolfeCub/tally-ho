@@ -8,6 +8,7 @@ mod actions;
 mod capture;
 mod components;
 mod money;
+mod poll;
 mod receipts;
 mod reconcile;
 mod review;

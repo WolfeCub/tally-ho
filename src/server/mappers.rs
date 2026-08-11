@@ -63,6 +63,15 @@ pub fn to_dto_summary(
     // Converts the items only to run the shared problem checks over them; they
     // are not sent, since a list shows the conclusion, not the rows.
     let converted: Vec<_> = items.iter().map(to_dto_line_item).collect();
+    let status = to_dto_status(&receipt.status);
+
+    // A receipt that hasn't been read yet fails the checks for the uninteresting
+    // reason that nothing is filled in — every one of them would report "no
+    // total" on a receipt whose total simply hasn't been extracted. That's the
+    // job not being finished, not something wrong with the receipt, so hold the
+    // checks until it is. `Failed` still reports: there the fields really are
+    // final, and empty.
+    let read = status.is_terminal();
 
     dto::ReceiptSummary {
         id: receipt.id,
@@ -70,14 +79,18 @@ pub fn to_dto_summary(
         merchant: receipt.merchant.clone(),
         total: receipt.total,
         currency: receipt.currency.clone(),
-        status: to_dto_status(&receipt.status),
+        status,
         item_count: items.len(),
         reviewed: receipt.reviewed_at.is_some(),
-        problems: crate::shared::problems::problems_of(
-            receipt.subtotal,
-            receipt.tax,
-            receipt.total,
-            &converted,
-        ),
+        problems: if read {
+            crate::shared::problems::problems_of(
+                receipt.subtotal,
+                receipt.tax,
+                receipt.total,
+                &converted,
+            )
+        } else {
+            Vec::new()
+        },
     }
 }

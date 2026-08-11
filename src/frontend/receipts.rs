@@ -3,15 +3,39 @@
 use leptos::prelude::*;
 
 use crate::frontend::components::ReceiptRows;
+use crate::frontend::poll::poll_while;
 use crate::shared::api::recent_receipts;
 
 #[component]
 pub fn ReceiptListPage() -> impl IntoView {
-    let receipts = Resource::new(|| (), |_| async move { recent_receipts(100).await });
+    // A row saying "reading…" keeps saying it unless the list is re-asked.
+    let tick = RwSignal::new(0u32);
+    let receipts = Resource::new(
+        move || tick.get(),
+        |_| async move { recent_receipts(100).await },
+    );
+
+    // Poll only while something is actually being read, which on a settled list
+    // is never.
+    //
+    // The resource reads as `None` both before its first load and during every
+    // refetch, and neither means "nothing left to wait for" — taking it that way
+    // stops the timer on the first tick, which is to say immediately. So hold the
+    // last real answer, and start out assuming there is something to wait for:
+    // one load where everything is terminal turns the polling off, and nothing
+    // else does.
+    let waiting = Memo::new(move |prev: Option<&bool>| match receipts.get() {
+        Some(Ok(rows)) => rows.iter().any(|r| !r.status.is_terminal()),
+        _ => prev.copied().unwrap_or(true),
+    });
+
+    poll_while(tick, move || waiting.get());
 
     view! {
         <h1 class="mb-4 text-xl font-semibold">"Receipts"</h1>
-        <Suspense fallback=|| {
+        // Transition rather than Suspense: polling refetches, and a fallback
+        // would blank the whole list every tick while a receipt is being read.
+        <Transition fallback=|| {
             view! { <p class="text-muted">"Loading…"</p> }
         }>
             {move || Suspend::new(async move {
@@ -23,6 +47,6 @@ pub fn ReceiptListPage() -> impl IntoView {
                     Ok(rows) => view! { <ReceiptRows rows /> }.into_any(),
                 }
             })}
-        </Suspense>
+        </Transition>
     }
 }
