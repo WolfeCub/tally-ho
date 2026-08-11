@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 
-use crate::frontend::components::ReceiptRows;
+use crate::frontend::components::{ReceiptRows, failed, loading};
 use crate::frontend::poll::poll_while;
 use crate::shared::api::recent_receipts;
 
@@ -10,10 +10,7 @@ use crate::shared::api::recent_receipts;
 pub fn ReceiptListPage() -> impl IntoView {
     // A row saying "reading…" keeps saying it unless the list is re-asked.
     let tick = RwSignal::new(0u32);
-    let receipts = Resource::new(
-        move || tick.get(),
-        |_| async move { recent_receipts(100).await },
-    );
+    let receipts = Resource::new(move || tick.get(), |_| recent_receipts(100));
 
     // Poll only while something is actually being read, which on a settled list
     // is never.
@@ -35,12 +32,10 @@ pub fn ReceiptListPage() -> impl IntoView {
         <h1 class="mb-4 text-xl font-semibold">"Receipts"</h1>
         // Transition rather than Suspense: polling refetches, and a fallback
         // would blank the whole list every tick while a receipt is being read.
-        <Transition fallback=|| {
-            view! { <p class="text-muted">"Loading…"</p> }
-        }>
+        <Transition fallback=loading>
             {move || Suspend::new(async move {
                 match receipts.await {
-                    Err(e) => view! { <p class="text-danger">{e.to_string()}</p> }.into_any(),
+                    Err(e) => failed(e),
                     Ok(rows) if rows.is_empty() => {
                         view! { <p class="text-muted">"No receipts yet."</p> }.into_any()
                     }

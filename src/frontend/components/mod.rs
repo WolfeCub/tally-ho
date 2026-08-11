@@ -10,7 +10,7 @@ mod steps;
 
 pub use form::{LabeledInput, confirm, field, form_element};
 pub use icons::{CameraIcon, Spinner, Verdict};
-pub use notice::{Notice, Tone};
+pub use notice::{Notice, Tone, failed, loading};
 pub use photo::ReceiptPhoto;
 pub use receipt_rows::ReceiptRows;
 pub use steps::StepBar;

@@ -241,25 +241,15 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Self {
-        let ocr_model =
-            std::env::var("OLLAMA_OCR_MODEL").unwrap_or_else(|_| DEFAULT_OCR_MODEL.to_string());
-        let keep_alive =
-            std::env::var("OLLAMA_KEEP_ALIVE").unwrap_or_else(|_| DEFAULT_KEEP_ALIVE.to_string());
+        use crate::server::env;
 
         Self {
-            url: std::env::var("OLLAMA_URL").unwrap_or_else(|_| DEFAULT_URL.to_string()),
-            model: std::env::var("OLLAMA_VISION_MODEL")
-                .unwrap_or_else(|_| DEFAULT_MODEL.to_string()),
-            ocr_model: Some(ocr_model).filter(|m| !m.trim().is_empty()),
-            ocr_context: std::env::var("OLLAMA_OCR_CONTEXT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(DEFAULT_OCR_CONTEXT),
-            keep_alive: Some(keep_alive).filter(|k| !k.trim().is_empty()),
-            max_image_edge: std::env::var("MAX_IMAGE_EDGE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(DEFAULT_MAX_EDGE),
+            url: env::string("OLLAMA_URL", DEFAULT_URL),
+            model: env::string("OLLAMA_VISION_MODEL", DEFAULT_MODEL),
+            ocr_model: env::optional("OLLAMA_OCR_MODEL", DEFAULT_OCR_MODEL),
+            ocr_context: env::number("OLLAMA_OCR_CONTEXT", DEFAULT_OCR_CONTEXT),
+            keep_alive: env::optional("OLLAMA_KEEP_ALIVE", DEFAULT_KEEP_ALIVE),
+            max_image_edge: env::number("MAX_IMAGE_EDGE", DEFAULT_MAX_EDGE),
         }
     }
 
@@ -462,29 +452,22 @@ impl ExtractedReceipt {
 
         let mut money = |label: &str, raw: &Option<String>| -> Option<Decimal> {
             let raw = raw.as_deref()?;
-            match parse_money(raw) {
-                Some(d) => Some(d),
-                None => {
-                    warnings.push(format!("could not parse {label} {raw:?}"));
-                    None
-                }
-            }
+            parse_money(raw).or_else(|| {
+                warnings.push(format!("could not parse {label} {raw:?}"));
+                None
+            })
         };
 
         let subtotal = money("subtotal", &self.subtotal);
         let tax = money("tax", &self.tax);
         let total = money("total", &self.total);
 
-        let purchased_on = match self.purchased_on.as_deref() {
-            None => None,
-            Some(raw) => match parse_date(raw) {
-                Some(d) => Some(d),
-                None => {
-                    warnings.push(format!("could not parse date {raw:?}"));
-                    None
-                }
-            },
-        };
+        let purchased_on = self.purchased_on.as_deref().and_then(|raw| {
+            parse_date(raw).or_else(|| {
+                warnings.push(format!("could not parse date {raw:?}"));
+                None
+            })
+        });
 
         let line_items = self
             .line_items
@@ -493,13 +476,10 @@ impl ExtractedReceipt {
             .map(|(i, item)| {
                 let mut parse = |label: &str, raw: &Option<String>| -> Option<Decimal> {
                     let raw = raw.as_deref()?;
-                    match parse_money(raw) {
-                        Some(d) => Some(d),
-                        None => {
-                            warnings.push(format!("item {i}: could not parse {label} {raw:?}"));
-                            None
-                        }
-                    }
+                    parse_money(raw).or_else(|| {
+                        warnings.push(format!("item {i}: could not parse {label} {raw:?}"));
+                        None
+                    })
                 };
                 NormalizedLineItem {
                     description: item.description.trim().to_string(),

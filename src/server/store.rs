@@ -30,7 +30,7 @@ impl Store {
     }
 
     pub fn from_env() -> Self {
-        Self::new(std::env::var("DATA_DIR").unwrap_or_else(|_| "./data".to_string()))
+        Self::new(crate::server::env::string("DATA_DIR", "./data"))
     }
 
     pub fn absolute(&self, relative: &str) -> PathBuf {

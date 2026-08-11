@@ -1,13 +1,49 @@
 //! Server functions.
 //!
 //! This file builds for wasm too, so every server-only import has to sit inside
-//! a function body rather than at module scope.
+//! a function body, or behind a `cfg` if more than one body needs it.
 
 use leptos::prelude::*;
 use leptos::server_fn::codec::{Json, MultipartData, MultipartFormData};
 use uuid::Uuid;
 
 use crate::shared::dto;
+
+// Server-only, so it can't be a plain module-scope import like the rest.
+#[cfg(feature = "ssr")]
+use anyhow::Context as _;
+
+/// The database handle, out of the request context. Every server function here
+/// starts with one.
+#[cfg(feature = "ssr")]
+fn db() -> toasty::Db {
+    use crate::server::state::AppState;
+    expect_context::<AppState>().db.clone()
+}
+
+/// The one file field a form sent, with whatever the browser called it.
+///
+/// Any other field is ignored rather than trusted, and the bytes come back empty
+/// if `name` never turned up — which the callers report in their own words.
+#[cfg(feature = "ssr")]
+async fn one_file(data: MultipartData, name: &str) -> (Option<String>, Vec<u8>) {
+    // `into_inner()` is always `Some` on the server.
+    let mut data = data.into_inner().expect("multipart data on the server");
+
+    let mut filename = None;
+    let mut bytes = Vec::new();
+    while let Ok(Some(mut field)) = data.next_field().await {
+        if field.name() != Some(name) {
+            continue;
+        }
+        filename = field.file_name().map(str::to_string);
+        while let Ok(Some(chunk)) = field.chunk().await {
+            bytes.extend_from_slice(&chunk);
+        }
+        break;
+    }
+    (filename, bytes)
+}
 
 /// Stores an uploaded photo, creates the receipt row, and kicks off extraction.
 ///
@@ -20,22 +56,7 @@ pub async fn upload_receipt(data: MultipartData) -> Result<Uuid, ServerFnError> 
 
     let state = expect_context::<AppState>();
 
-    // `into_inner()` is always `Some` on the server.
-    let mut data = data.into_inner().expect("multipart data on the server");
-
-    let mut bytes: Vec<u8> = Vec::new();
-    while let Ok(Some(mut field)) = data.next_field().await {
-        // The browser sends one file field; anything else is ignored rather
-        // than trusted.
-        if field.name() != Some("receipt") {
-            continue;
-        }
-        while let Ok(Some(chunk)) = field.chunk().await {
-            bytes.extend_from_slice(&chunk);
-        }
-        break;
-    }
-
+    let (_, bytes) = one_file(data, "receipt").await;
     if bytes.is_empty() {
         return Err(ServerFnError::new("no image was uploaded"));
     }
@@ -45,7 +66,8 @@ pub async fn upload_receipt(data: MultipartData) -> Result<Uuid, ServerFnError> 
         .store
         .write_upload(&bytes, today)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not store image: {e}")))?;
+        .context("could not store image")
+        .map_err(ServerFnError::new)?;
 
     let mut db = state.db.clone();
     // Deliberately minimal: everything else is unknown until extraction runs.
@@ -59,7 +81,8 @@ pub async fn upload_receipt(data: MultipartData) -> Result<Uuid, ServerFnError> 
     })
     .exec(&mut db)
     .await
-    .map_err(|e| ServerFnError::new(format!("could not create receipt: {e}")))?;
+    .context("could not create receipt")
+    .map_err(ServerFnError::new)?;
 
     job::spawn(state.clone(), receipt.id);
 
@@ -70,16 +93,53 @@ pub async fn upload_receipt(data: MultipartData) -> Result<Uuid, ServerFnError> 
 #[server]
 pub async fn receipt_status(id: Uuid) -> Result<dto::ExtractionStatus, ServerFnError> {
     use crate::server::models::Receipt;
-    use crate::server::state::AppState;
+
+    let mut db = db();
+
+    let receipt = Receipt::get_by_id(&mut db, &id)
+        .await
+        .context("no such receipt")
+        .map_err(ServerFnError::new)?;
+
+    Ok(crate::server::mappers::to_dto_status(&receipt.status))
+}
+
+/// Re-runs extraction on a receipt the model failed to read.
+///
+/// Only from `Failed`: one still extracting already has a job running, and a
+/// finished one has line items a second run would duplicate.
+#[server]
+pub async fn retry_extraction(id: Uuid) -> Result<(), ServerFnError> {
+    use crate::server::models::{ExtractionStatus, Receipt};
+    use crate::server::{job, state::AppState};
 
     let state = expect_context::<AppState>();
     let mut db = state.db.clone();
 
-    let receipt = Receipt::get_by_id(&mut db, &id)
+    let mut receipt = Receipt::get_by_id(&mut db, &id)
         .await
-        .map_err(|e| ServerFnError::new(format!("no such receipt: {e}")))?;
+        .context("no such receipt")
+        .map_err(ServerFnError::new)?;
 
-    Ok(crate::server::mappers::to_dto_status(&receipt.status))
+    if receipt.status != ExtractionStatus::Failed {
+        return Err(ServerFnError::new(
+            "this receipt didn't fail — nothing to retry",
+        ));
+    }
+
+    // Cleared before spawning, so the caller's reload sees a receipt that's
+    // working again rather than the failure it just retried.
+    toasty::update!(receipt {
+        status: ExtractionStatus::Pending,
+        extraction_error: None,
+    })
+    .exec(&mut db)
+    .await
+    .context("could not reset receipt")
+    .map_err(ServerFnError::new)?;
+
+    job::spawn(state, id);
+    Ok(())
 }
 
 /// Parses a human-typed amount, distinguishing "cleared" from "unparseable".
@@ -98,17 +158,15 @@ fn optional_money(field: &str, raw: &str) -> Result<Option<rust_decimal::Decimal
 /// line items as the human left them.
 #[server]
 pub async fn save_receipt(save: dto::ReceiptSave) -> Result<dto::Receipt, ServerFnError> {
-    use crate::server::state::AppState;
-
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
+    let mut db = db();
 
     let id = save.id;
     let parsed = parse_save(save)?;
 
     crate::server::query::save_receipt(&mut db, id, parsed)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not save receipt: {e}")))?;
+        .context("could not save receipt")
+        .map_err(ServerFnError::new)?;
 
     load_receipt(&mut db, id).await
 }
@@ -157,14 +215,12 @@ fn parse_save(save: dto::ReceiptSave) -> Result<crate::server::query::ReceiptSav
 /// Everyone a line item can be charged to, by name.
 #[server]
 pub async fn list_people() -> Result<Vec<dto::Person>, ServerFnError> {
-    use crate::server::state::AppState;
-
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
+    let mut db = db();
 
     crate::server::query::list_people(&mut db)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not load people: {e}")))
+        .context("could not load people")
+        .map_err(ServerFnError::new)
 }
 
 /// Applies the settings screen: everyone it ended up with, in one write.
@@ -174,7 +230,6 @@ pub async fn list_people() -> Result<Vec<dto::Person>, ServerFnError> {
 #[server]
 pub async fn save_people(people: Vec<dto::PersonSave>) -> Result<(), ServerFnError> {
     use crate::server::query::PersonSave;
-    use crate::server::state::AppState;
 
     let mut parsed = Vec::with_capacity(people.len());
     for person in people {
@@ -197,12 +252,12 @@ pub async fn save_people(people: Vec<dto::PersonSave>) -> Result<(), ServerFnErr
         });
     }
 
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
+    let mut db = db();
 
     crate::server::query::save_people(&mut db, parsed)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not save people: {e}")))
+        .context("could not save people")
+        .map_err(ServerFnError::new)
 }
 
 /// Throws away a receipt, its line items and its photo.
@@ -213,12 +268,14 @@ pub async fn save_people(people: Vec<dto::PersonSave>) -> Result<(), ServerFnErr
 pub async fn delete_receipt(id: Uuid) -> Result<(), ServerFnError> {
     use crate::server::state::AppState;
 
+    // The whole state, not just the db: the photo has to go too.
     let state = expect_context::<AppState>();
     let mut db = state.db.clone();
 
     let image_path = crate::server::query::delete_receipt(&mut db, id)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not delete receipt: {e}")))?;
+        .context("could not delete receipt")
+        .map_err(ServerFnError::new)?;
 
     // After the rows, and only a warning: the filesystem isn't part of the
     // transaction and the receipt is already gone. An orphaned image costs disk;
@@ -237,14 +294,13 @@ pub async fn delete_receipt(id: Uuid) -> Result<(), ServerFnError> {
 #[server]
 pub async fn mark_reviewed(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
     use crate::server::models::Receipt;
-    use crate::server::state::AppState;
 
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
+    let mut db = db();
 
     let mut receipt = Receipt::get_by_id(&mut db, &id)
         .await
-        .map_err(|e| ServerFnError::new(format!("no such receipt: {e}")))?;
+        .context("no such receipt")
+        .map_err(ServerFnError::new)?;
 
     if receipt.total.is_none() {
         return Err(ServerFnError::new(
@@ -257,25 +313,31 @@ pub async fn mark_reviewed(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
     })
     .exec(&mut db)
     .await
-    .map_err(|e| ServerFnError::new(format!("could not mark reviewed: {e}")))?;
+    .context("could not mark reviewed")
+    .map_err(ServerFnError::new)?;
 
     load_receipt(&mut db, id).await
 }
 
-/// Shared tail for the mutations: they all return the receipt as it now stands,
-/// so the client never has to guess what the server did.
+/// One receipt as it now stands, items and all.
+///
+/// Every mutation ends here rather than reporting a bare success, so the client
+/// never has to guess what the server did. [`get_receipt`] is the same thing
+/// asked for on its own.
 #[cfg(feature = "ssr")]
 async fn load_receipt(db: &mut toasty::Db, id: Uuid) -> Result<dto::Receipt, ServerFnError> {
     use crate::server::models::Receipt;
 
     let receipt = Receipt::get_by_id(db, &id)
         .await
-        .map_err(|e| ServerFnError::new(format!("no such receipt: {e}")))?;
+        .context("no such receipt")
+        .map_err(ServerFnError::new)?;
     let items = receipt
         .line_items()
         .exec(db)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not load line items: {e}")))?;
+        .context("could not load line items")
+        .map_err(ServerFnError::new)?;
     Ok(crate::server::mappers::to_dto_receipt(&receipt, &items))
 }
 
@@ -292,26 +354,13 @@ pub async fn import_statement(data: MultipartData) -> Result<dto::Imported, Serv
     use crate::server::statements;
 
     let state = expect_context::<AppState>();
-    let mut data = data.into_inner().expect("multipart data on the server");
 
-    let mut label = String::new();
-    let mut bytes: Vec<u8> = Vec::new();
-    while let Ok(Some(mut field)) = data.next_field().await {
-        // The browser sends one file field; anything else is ignored rather
-        // than trusted.
-        if field.name() != Some("statement") {
-            continue;
-        }
-        label = field.file_name().unwrap_or("statement.csv").to_string();
-        while let Ok(Some(chunk)) = field.chunk().await {
-            bytes.extend_from_slice(&chunk);
-        }
-        break;
-    }
-
+    let (label, bytes) = one_file(data, "statement").await;
     if bytes.is_empty() {
         return Err(ServerFnError::new("no file was uploaded"));
     }
+    // Only ever shown, so an unnamed upload gets a name rather than an error.
+    let label = label.unwrap_or_else(|| "statement.csv".to_string());
 
     let parsed =
         statements::parse::charges(&bytes).map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -319,7 +368,8 @@ pub async fn import_statement(data: MultipartData) -> Result<dto::Imported, Serv
     let mut db = state.db.clone();
     let id = statements::import(&mut db, &label, &state.currency, &parsed)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not import the statement: {e}")))?;
+        .context("could not import the statement")
+        .map_err(ServerFnError::new)?;
 
     Ok(dto::Imported {
         id,
@@ -336,28 +386,24 @@ pub async fn import_statement(data: MultipartData) -> Result<dto::Imported, Serv
 /// Every statement imported, newest first.
 #[server]
 pub async fn list_statements() -> Result<Vec<dto::StatementSummary>, ServerFnError> {
-    use crate::server::state::AppState;
-
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
+    let mut db = db();
 
     crate::server::statements::list(&mut db)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not load statements: {e}")))
+        .context("could not load statements")
+        .map_err(ServerFnError::new)
 }
 
 /// One statement to reconcile: every charge, what accounts for it, and what it
 /// splits to.
 #[server]
 pub async fn get_statement(id: Uuid) -> Result<dto::Statement, ServerFnError> {
-    use crate::server::state::AppState;
-
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
+    let mut db = db();
 
     crate::server::statements::load(&mut db, id)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not load the statement: {e}")))
+        .context("could not load the statement")
+        .map_err(ServerFnError::new)
 }
 
 /// Records what a human decided about one charge.
@@ -367,10 +413,7 @@ pub async fn get_statement(id: Uuid) -> Result<dto::Statement, ServerFnError> {
 /// no fields and the whole argument missing from the body.
 #[server(input = Json)]
 pub async fn resolve_charge(charge_id: Uuid, how: dto::Resolve) -> Result<(), ServerFnError> {
-    use crate::server::state::AppState;
-
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
+    let mut db = db();
 
     crate::server::statements::resolve(&mut db, charge_id, how)
         .await
@@ -380,44 +423,39 @@ pub async fn resolve_charge(charge_id: Uuid, how: dto::Resolve) -> Result<(), Se
 /// Receipts nothing accounts for yet, for picking one by hand.
 #[server]
 pub async fn spare_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, ServerFnError> {
-    use crate::server::state::AppState;
-
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
+    let mut db = db();
 
     crate::server::statements::spare(&mut db, limit)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not load receipts: {e}")))
+        .context("could not load receipts")
+        .map_err(ServerFnError::new)
 }
 
 /// Throws away a statement and its charges. The receipts stay.
 #[server]
 pub async fn delete_statement(id: Uuid) -> Result<(), ServerFnError> {
-    use crate::server::state::AppState;
-
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
+    let mut db = db();
 
     crate::server::statements::delete(&mut db, id)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not delete the statement: {e}")))
+        .context("could not delete the statement")
+        .map_err(ServerFnError::new)
 }
 
 /// Reverse-chronological receipts, newest first, for the list tab.
 #[server]
 pub async fn recent_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, ServerFnError> {
     use crate::server::models::Receipt;
-    use crate::server::state::AppState;
 
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
+    let mut db = db();
 
     let receipts = Receipt::all()
         .order_by(Receipt::fields().purchased_on().desc())
         .limit(limit)
         .exec(&mut db)
         .await
-        .map_err(|e| ServerFnError::new(format!("could not load receipts: {e}")))?;
+        .context("could not load receipts")
+        .map_err(ServerFnError::new)?;
 
     let mut out = Vec::with_capacity(receipts.len());
     for receipt in receipts {
@@ -425,7 +463,8 @@ pub async fn recent_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, S
             .line_items()
             .exec(&mut db)
             .await
-            .map_err(|e| ServerFnError::new(format!("could not load line items: {e}")))?;
+            .context("could not load line items")
+            .map_err(ServerFnError::new)?;
         out.push(crate::server::mappers::to_dto_summary(&receipt, &items));
     }
     Ok(out)
@@ -434,20 +473,5 @@ pub async fn recent_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, S
 /// Full receipt with line items, for the review screen.
 #[server]
 pub async fn get_receipt(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
-    use crate::server::models::Receipt;
-    use crate::server::state::AppState;
-
-    let state = expect_context::<AppState>();
-    let mut db = state.db.clone();
-
-    let receipt = Receipt::get_by_id(&mut db, &id)
-        .await
-        .map_err(|e| ServerFnError::new(format!("no such receipt: {e}")))?;
-    let items = receipt
-        .line_items()
-        .exec(&mut db)
-        .await
-        .map_err(|e| ServerFnError::new(format!("could not load line items: {e}")))?;
-
-    Ok(crate::server::mappers::to_dto_receipt(&receipt, &items))
+    load_receipt(&mut db(), id).await
 }

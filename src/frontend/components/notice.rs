@@ -1,5 +1,6 @@
-//! The bordered message blocks: what needs attention, what the model wasn't
-//! sure of, and what just failed to save.
+//! Telling you what's going on: the bordered blocks for what needs attention or
+//! failed to save, and the bare lines a screen shows in place of content it
+//! hasn't got.
 
 use leptos::prelude::*;
 
@@ -9,6 +10,17 @@ pub enum Tone {
     Bad,
     /// Worth knowing, not worth alarming anyone.
     Quiet,
+}
+
+/// What a screen shows while its resource is in flight: `fallback=loading`.
+pub fn loading() -> impl IntoView {
+    view! { <p class="text-muted">"Loading…"</p> }
+}
+
+/// Shown instead of the content, when there isn't going to be any — a failed
+/// load, or a URL naming something that isn't there.
+pub fn failed(why: impl ToString) -> AnyView {
+    view! { <p class="text-danger">{why.to_string()}</p> }.into_any()
 }
 
 #[component]

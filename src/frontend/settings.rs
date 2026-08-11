@@ -4,14 +4,14 @@ use leptos::prelude::*;
 use leptos::web_sys::SubmitEvent;
 use uuid::Uuid;
 
-use crate::frontend::actions::{error_of, first_error, succeeded};
-use crate::frontend::components::{BUTTON, INPUT, Notice, PRIMARY, Tone};
+use crate::frontend::actions::{error_of, succeeded};
+use crate::frontend::components::{BUTTON, INPUT, Notice, PRIMARY, Tone, failed, loading};
 use crate::shared::api::{list_people, save_people};
 use crate::shared::dto::{Person, PersonSave};
 
 #[component]
 pub fn SettingsPage() -> impl IntoView {
-    let people = Resource::new(|| (), |_| async move { list_people().await });
+    let people = Resource::new(|| (), |_| list_people());
 
     view! {
         <h1 class="mb-6 text-xl font-semibold">"Settings"</h1>
@@ -25,12 +25,10 @@ pub fn SettingsPage() -> impl IntoView {
 
             // Transition, not Suspense: saving refetches, and a fallback would
             // blank the list you were just editing.
-            <Transition fallback=|| {
-                view! { <p class="text-muted">"Loading…"</p> }
-            }>
+            <Transition fallback=loading>
                 {move || Suspend::new(async move {
                     match people.await {
-                        Err(e) => view! { <p class="text-danger">{e.to_string()}</p> }.into_any(),
+                        Err(e) => failed(e),
                         Ok(list) => {
                             view! { <PeopleForm people=list reload=move || people.refetch() /> }
                                 .into_any()
@@ -88,10 +86,7 @@ fn PeopleForm(
         });
     };
 
-    let save = Action::new(|people: &Vec<PersonSave>| {
-        let people = people.clone();
-        async move { save_people(people).await }
-    });
+    let save = Action::new(|people: &Vec<PersonSave>| save_people(people.clone()));
 
     Effect::new(move |_| {
         if succeeded(save) {
@@ -115,7 +110,7 @@ fn PeopleForm(
 
     view! {
         {move || {
-            first_error([error_of(save)]).map(|e| view! { <Notice tone=Tone::Bad>{e}</Notice> })
+            error_of(save).map(|e| view! { <Notice tone=Tone::Bad>{e.to_string()}</Notice> })
         }}
 
         <form class="flex flex-col gap-3" on:submit=submit>

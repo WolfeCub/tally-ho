@@ -9,9 +9,11 @@ use uuid::Uuid;
 
 use crate::frontend::actions::{error_of, succeeded};
 use crate::frontend::components::{
-    AS_BUTTON, BUTTON, DANGER, INPUT, Notice, PRIMARY, Tone, confirm, form_element,
+    AS_BUTTON, BUTTON, DANGER, INPUT, Notice, PRIMARY, Tone, confirm, failed, form_element, loading,
 };
-use crate::frontend::money::{money, money_total};
+use crate::frontend::money::{money, money_total, shares_line};
+use crate::frontend::poll::poll_while;
+use crate::frontend::route::id_param;
 use crate::frontend::text::plural;
 use crate::shared::api::{
     delete_statement, get_statement, import_statement, list_statements, resolve_charge,
@@ -22,7 +24,7 @@ use charge::{ChargeRow, Shared, still_reading};
 
 #[component]
 pub fn StatementsPage() -> impl IntoView {
-    let statements = Resource::new(|| (), |_| async move { list_statements().await });
+    let statements = Resource::new(|| (), |_| list_statements());
     // `_local` because FormData is not Send; the upload only ever runs client-side.
     let import = Action::new_local(|data: &FormData| import_statement(data.clone().into()));
     let imported = move || import.value().get().and_then(|r| r.ok());
@@ -77,12 +79,10 @@ pub fn StatementsPage() -> impl IntoView {
         {move || imported().map(|imported| view! { <ImportedCard imported /> })}
 
         <h2 class="mt-8 mb-2 font-semibold">"Imported"</h2>
-        <Transition fallback=|| {
-            view! { <p class="text-muted">"Loading…"</p> }
-        }>
+        <Transition fallback=loading>
             {move || Suspend::new(async move {
                 match statements.await {
-                    Err(e) => view! { <p class="text-danger">{e.to_string()}</p> }.into_any(),
+                    Err(e) => failed(e),
                     Ok(rows) if rows.is_empty() => {
                         view! { <p class="text-muted">"No statements yet."</p> }.into_any()
                     }
@@ -170,55 +170,39 @@ fn StatementRows(rows: Vec<StatementSummary>) -> impl IntoView {
 
 #[component]
 pub fn ReconcilePage() -> impl IntoView {
-    use leptos_router::hooks::use_params_map;
-
-    let params = use_params_map();
-    let id = move || {
-        params
-            .read()
-            .get("id")
-            .and_then(|s| Uuid::parse_str(&s).ok())
-    };
-
-    // Both in one resource: the picker offers the receipts nothing accounts for,
-    // and a stale list would offer one that was just used.
-    let data = Resource::new(id, |id| async move {
-        let Some(id) = id else { return Ok(None) };
-        let statement = get_statement(id).await?;
-        let spare = spare_receipts(100).await?;
-        Ok::<_, ServerFnError>(Some((statement, spare)))
-    });
+    let id = id_param();
 
     // A receipt photographed here is attached while the model is still reading it,
-    // and nothing pushes the result down when it lands — so ask again. In an effect
-    // because timers are wasm-only, and here rather than in the view so that a
-    // refetch reconsiders the one pending timer instead of stacking another on it.
-    Effect::new(move |previous: Option<Option<TimeoutHandle>>| {
-        if let Some(Some(timer)) = previous {
-            timer.clear();
-        }
-        let waiting = matches!(
-            data.get(),
-            Some(Ok(Some((ref statement, _)))) if statement.charges.iter().any(still_reading)
-        );
-        if !waiting {
-            return None;
-        }
-        set_timeout_with_handle(move || data.refetch(), std::time::Duration::from_secs(2)).ok()
+    // and nothing pushes the result down when it lands — so ask again until it has.
+    let tick = RwSignal::new(0u32);
+    // Both in one resource: the picker offers the receipts nothing accounts for,
+    // and a stale list would offer one that was just used.
+    let data = Resource::new(
+        move || (id(), tick.get()),
+        |(id, _)| async move {
+            let Some(id) = id else { return Ok(None) };
+            let statement = get_statement(id).await?;
+            let spare = spare_receipts(100).await?;
+            Ok::<_, ServerFnError>(Some((statement, spare)))
+        },
+    );
+
+    // A refetch in flight reads as `None`, which is no answer at all — hold the
+    // last real one, or polling would stop itself on its own first tick.
+    let waiting = Memo::new(move |prev: Option<&bool>| match data.get() {
+        Some(Ok(Some((statement, _)))) => statement.charges.iter().any(still_reading),
+        _ => prev.copied().unwrap_or(false),
     });
+    poll_while(tick, move || waiting.get());
 
     view! {
         // Transition rather than Suspense: every decision refetches, and a
         // fallback would blank the statement each time.
-        <Transition fallback=|| {
-            view! { <p class="text-muted">"Loading…"</p> }
-        }>
+        <Transition fallback=loading>
             {move || Suspend::new(async move {
                 match data.await {
-                    Err(e) => view! { <p class="text-danger">{e.to_string()}</p> }.into_any(),
-                    Ok(None) => {
-                        view! { <p class="text-danger">"Not a valid statement id."</p> }.into_any()
-                    }
+                    Err(e) => failed(e),
+                    Ok(None) => failed("Not a valid statement id."),
                     Ok(Some((statement, spare))) => {
                         view! {
                             <StatementView statement spare reload=move || data.refetch() />
@@ -238,14 +222,8 @@ fn StatementView(
     reload: impl Fn() + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
     let id = statement.id;
-    let resolve = Action::new(move |(charge_id, how): &(Uuid, Resolve)| {
-        let (charge_id, how) = (*charge_id, *how);
-        async move { resolve_charge(charge_id, how).await }
-    });
-    let discard = Action::new(move |id: &Uuid| {
-        let id = *id;
-        async move { delete_statement(id).await }
-    });
+    let resolve = Action::new(|&(charge_id, how): &(Uuid, Resolve)| resolve_charge(charge_id, how));
+    let discard = Action::new(|id: &Uuid| delete_statement(*id));
 
     Effect::new(move |_| {
         if succeeded(resolve) {
@@ -328,18 +306,7 @@ fn Summary(statement: Statement) -> impl IntoView {
     let (left, short) = statement.outstanding();
     let percent = done * 100 / count.max(1);
 
-    let owed: Vec<_> = statement
-        .totals()
-        .iter()
-        .filter_map(|share| {
-            let person = statement.people.iter().find(|p| p.id == share.person_id)?;
-            Some(format!(
-                "{} {}",
-                person.name,
-                money(share.amount, &currency)
-            ))
-        })
-        .collect();
+    let owed = shares_line(&statement.totals(), &statement.people, &currency);
 
     view! {
         <div class="mb-4 rounded-lg border border-edge bg-surface p-4">
@@ -352,7 +319,7 @@ fn Summary(statement: Statement) -> impl IntoView {
                     <p class="text-3xl font-semibold tabular-nums">
                         {money_total(statement.total(), &currency)}
                     </p>
-                    <p class="mt-1 tabular-nums">{owed.join(" · ")}</p>
+                    <p class="mt-1 tabular-nums">{owed}</p>
                 </div>
                 // `download` is required: leptos_router intercepts same-origin
                 // anchors without it and navigates the SPA to the URL, which

@@ -48,8 +48,7 @@ impl AppState {
 /// Refuses to start on a code the ISO list doesn't have: matching never crosses
 /// currencies, so a typo would silently match nothing at all.
 fn currency_from_env() -> Result<String, Box<dyn std::error::Error>> {
-    let code = std::env::var("CURRENCY")
-        .unwrap_or_else(|_| DEFAULT_CURRENCY.to_string())
+    let code = crate::server::env::string("CURRENCY", DEFAULT_CURRENCY)
         .trim()
         .to_uppercase();
 

@@ -12,6 +12,7 @@ mod poll;
 mod receipts;
 mod reconcile;
 mod review;
+mod route;
 mod settings;
 mod text;
 

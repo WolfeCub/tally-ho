@@ -6,10 +6,12 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::frontend::components::{INPUT, Spinner};
-use crate::frontend::money::money;
-use crate::frontend::text::plural;
+use crate::frontend::money::{money, shares_line};
+use crate::frontend::text::{merchant, plural, total_or_why};
 use crate::shared::api::upload_receipt;
-use crate::shared::dto::{Candidate, Charge, Matched, Person, ReceiptSummary, Resolution, Resolve};
+use crate::shared::dto::{
+    Candidate, Charge, Matched, Person, ReceiptSummary, Resolution, Resolve, Share,
+};
 
 /// A row action. Narrower than a full [`crate::frontend::components::BUTTON`] so
 /// several fit across a phone, and still 44px tall.
@@ -30,6 +32,14 @@ pub struct Shared {
 impl Shared {
     fn money(&self, amount: Decimal) -> String {
         self.currency.with_value(|currency| money(amount, currency))
+    }
+
+    /// Who owes what, as the export will have it.
+    fn split_line(&self, shares: &[Share]) -> String {
+        self.currency.with_value(|currency| {
+            self.people
+                .with_value(|people| shares_line(shares, people, currency))
+        })
     }
 }
 
@@ -71,7 +81,7 @@ fn ChargeBody(
     resolve: impl Fn(Uuid, Resolve) + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
     let id = charge.id;
-    let split = split_line(&charge, shared);
+    let split = shared.split_line(&charge.split);
     let undo = move || {
         view! {
             <button type="button" class=ACTION on:click=move |_| resolve(id, Resolve::Clear)>
@@ -263,15 +273,8 @@ fn AttachSelect(
         format!(
             "{} · {} · {}",
             receipt.purchased_on,
-            if receipt.merchant.is_empty() {
-                "(no merchant)"
-            } else {
-                &receipt.merchant
-            },
-            match receipt.total {
-                Some(total) => money(total, &receipt.currency),
-                None => "no total".to_string(),
-            },
+            merchant(&receipt.merchant),
+            total_or_why(receipt.total, &receipt.currency, receipt.status),
         )
     };
 
@@ -391,19 +394,4 @@ fn Photograph(
                 .map(|e| view! { <p class="mt-1 text-sm text-danger">{e.to_string()}</p> })
         }}
     }
-}
-
-/// Who owes what for one charge, as the export will have it.
-fn split_line(charge: &Charge, shared: Shared) -> String {
-    shared.people.with_value(|people| {
-        charge
-            .split
-            .iter()
-            .filter_map(|share| {
-                let person = people.iter().find(|p| p.id == share.person_id)?;
-                Some(format!("{} {}", person.name, shared.money(share.amount)))
-            })
-            .collect::<Vec<_>>()
-            .join(" · ")
-    })
 }

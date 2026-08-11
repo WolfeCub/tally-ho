@@ -9,7 +9,7 @@ use std::path::Path;
 const DEFAULT_URL: &str = "sqlite:./data/tally-ho.db";
 
 fn url_from_env() -> String {
-    std::env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_URL.to_string())
+    crate::server::env::string("DATABASE_URL", DEFAULT_URL)
 }
 
 /// Where the migrations, snapshots, and history file live.
@@ -22,7 +22,7 @@ fn url_from_env() -> String {
 /// what we want, and `MigrationConfig` has no serde defaults, so a config file
 /// would have to spell out every field.
 pub fn migration_config() -> toasty_cli::Config {
-    let path = std::env::var("MIGRATIONS_DIR").unwrap_or_else(|_| "toasty".to_string());
+    let path = crate::server::env::string("MIGRATIONS_DIR", "toasty");
     toasty_cli::Config::new().migration(toasty_cli::MigrationConfig::new().path(path))
 }
 

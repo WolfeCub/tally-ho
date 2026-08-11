@@ -12,11 +12,16 @@ use uuid::Uuid;
 
 use crate::frontend::actions::{error_of, first_error, succeeded};
 use crate::frontend::components::{
-    BUTTON, DANGER, LabeledInput, Notice, PRIMARY, ReceiptPhoto, Tone, confirm, field, form_element,
+    BUTTON, DANGER, LabeledInput, Notice, PRIMARY, ReceiptPhoto, Spinner, Tone, confirm, failed,
+    field, form_element, loading,
 };
-use crate::frontend::money::money;
-use crate::shared::api::{delete_receipt, get_receipt, list_people, mark_reviewed, save_receipt};
-use crate::shared::dto::{LineItemSave, Person, Receipt, ReceiptSave};
+use crate::frontend::poll::poll_while;
+use crate::frontend::route::id_param;
+use crate::frontend::text::total_or_why;
+use crate::shared::api::{
+    delete_receipt, get_receipt, list_people, mark_reviewed, retry_extraction, save_receipt,
+};
+use crate::shared::dto::{ExtractionStatus, LineItemSave, Person, Receipt, ReceiptSave};
 use items::{LineItems, Row};
 
 /// Ties the Save button to the fields, so it can sit with the other buttons at
@@ -25,15 +30,7 @@ const FORM_ID: &str = "receipt";
 
 #[component]
 pub fn ReviewPage() -> impl IntoView {
-    use leptos_router::hooks::use_params_map;
-
-    let params = use_params_map();
-    let id = move || {
-        params
-            .read()
-            .get("id")
-            .and_then(|s| Uuid::parse_str(&s).ok())
-    };
+    let id = id_param();
 
     // Set when you got here from a statement, so there's a way back to one
     // half-reconciled. A path only — a query parameter shouldn't be able to point
@@ -46,14 +43,30 @@ pub fn ReviewPage() -> impl IntoView {
             .filter(|href| href.starts_with('/'))
     };
 
+    // A receipt can still be extracting when this screen opens — a fresh upload
+    // followed here, or a retry from here — so re-ask on a tick until it settles.
+    // Re-asking for the receipt rather than just its status: what changes when
+    // extraction finishes is the receipt, and that's what the screen draws.
+    let tick = RwSignal::new(0u32);
     // Both in one resource: without the people list the assignment dropdowns
     // would quietly come up empty, which reads as "nobody to charge this to".
-    let receipt = Resource::new(id, |id| async move {
-        let Some(id) = id else { return Ok(None) };
-        let receipt = get_receipt(id).await?;
-        let people = list_people().await?;
-        Ok::<_, ServerFnError>(Some((receipt, people)))
+    let receipt = Resource::new(
+        move || (id(), tick.get()),
+        |(id, _)| async move {
+            let Some(id) = id else { return Ok(None) };
+            let receipt = get_receipt(id).await?;
+            let people = list_people().await?;
+            Ok::<_, ServerFnError>(Some((receipt, people)))
+        },
+    );
+
+    // A refetch in flight reads as `None`, which is no answer at all — hold the
+    // last real one, or polling would stop itself on its own first tick.
+    let extracting = Memo::new(move |prev: Option<&bool>| match receipt.get() {
+        Some(Ok(Some((r, _)))) => !r.status.is_terminal(),
+        _ => prev.copied().unwrap_or(false),
     });
+    poll_while(tick, move || extracting.get());
 
     view! {
         {move || {
@@ -68,13 +81,11 @@ pub fn ReviewPage() -> impl IntoView {
         }}
         // Transition rather than Suspense: saving refetches, and a fallback
         // would blank the whole screen every time.
-        <Transition fallback=|| {
-            view! { <p class="text-muted">"Loading…"</p> }
-        }>
+        <Transition fallback=loading>
             {move || Suspend::new(async move {
                 match receipt.await {
-                    Err(e) => view! { <p class="text-danger">{e.to_string()}</p> }.into_any(),
-                    Ok(None) => view! { <p class="text-danger">"Not a valid receipt id."</p> }.into_any(),
+                    Err(e) => failed(e),
+                    Ok(None) => failed("Not a valid receipt id."),
                     Ok(Some((r, people))) => {
                         view! { <ReviewForm receipt=r people reload=move || receipt.refetch() /> }
                             .into_any()
@@ -95,27 +106,21 @@ fn ReviewForm(
     reload: impl Fn() + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
     let id = receipt.id;
-    let problems = receipt.problems();
-    let warnings = receipt.extraction_error.clone();
+    // As fresh as the poll above: the form is rebuilt on every load.
+    let extracting = !receipt.status.is_terminal();
     let reviewed = receipt.reviewed;
     let has_total = receipt.total.is_some();
     let rows = RwSignal::new(Row::from_items(&receipt.line_items));
 
-    let save = Action::new(move |save: &ReceiptSave| {
-        let save = save.clone();
-        async move { save_receipt(save).await }
-    });
-    let review = Action::new(move |rid: &Uuid| {
-        let rid = *rid;
-        async move { mark_reviewed(rid).await }
-    });
-    let discard = Action::new(move |rid: &Uuid| {
-        let rid = *rid;
-        async move { delete_receipt(rid).await }
-    });
+    let save = Action::new(|save: &ReceiptSave| save_receipt(save.clone()));
+    let review = Action::new(|id: &Uuid| mark_reviewed(*id));
+    let discard = Action::new(|id: &Uuid| delete_receipt(*id));
+    let retry = Action::new(|id: &Uuid| retry_extraction(*id));
 
+    // A retry reloads too: picking up its `Pending` status is what starts the
+    // polling, and nothing else would notice the job it just started.
     Effect::new(move |_| {
-        if succeeded(save) || succeeded(review) {
+        if succeeded(save) || succeeded(review) || succeeded(retry) {
             reload();
         }
     });
@@ -129,7 +134,14 @@ fn ReviewForm(
         }
     });
 
-    let error_text = move || first_error([error_of(save), error_of(review), error_of(discard)]);
+    let error_text = move || {
+        first_error([
+            error_of(save),
+            error_of(review),
+            error_of(discard),
+            error_of(retry),
+        ])
+    };
 
     let submit = move |ev: SubmitEvent| {
         ev.prevent_default();
@@ -166,23 +178,7 @@ fn ReviewForm(
 
             // min-w-0 so long merchant names can't push the column wider than half.
             <div class="min-w-0">
-                {(!problems.is_empty())
-                    .then(|| {
-                        view! {
-                            <Notice tone=Tone::Bad>
-                                <p class="mb-2 font-semibold">"Needs attention"</p>
-                                <ul class="list-disc pl-5 text-sm">
-                                    {problems
-                                        .iter()
-                                        .map(|p| view! { <li>{p.clone()}</li> })
-                                        .collect_view()}
-                                </ul>
-                            </Notice>
-                        }
-                    })}
-
-                {warnings
-                    .map(|w| view! { <Notice tone=Tone::Quiet>"Extraction notes: " {w}</Notice> })}
+                <ExtractionNotice receipt=receipt.clone() retry />
 
                 {move || error_text().map(|e| view! { <Notice tone=Tone::Bad>{e}</Notice> })}
 
@@ -199,7 +195,7 @@ fn ReviewForm(
                     <button
                         type="submit"
                         form=FORM_ID
-                        disabled=move || save.pending().get()
+                        disabled=move || save.pending().get() || extracting
                         class=format!("{PRIMARY} w-full")
                     >
                         {move || if save.pending().get() { "Saving…" } else { "Save receipt" }}
@@ -208,7 +204,7 @@ fn ReviewForm(
                     <button
                         type="button"
                         class=format!("{BUTTON} w-full")
-                        disabled=!has_total
+                        disabled=!has_total || extracting
                         on:click=move |_| {
                             review.dispatch(id);
                         }
@@ -241,6 +237,74 @@ fn ReviewForm(
     }
 }
 
+/// What extraction has to say for itself: still reading, gave up, or landed on
+/// something worth a closer look.
+#[component]
+fn ExtractionNotice(
+    receipt: Receipt,
+    retry: Action<Uuid, Result<(), ServerFnError>>,
+) -> impl IntoView {
+    let id = receipt.id;
+    let pending = move || retry.pending().get();
+    // Doubles as the reason it failed and, on success, the extractor's per-field
+    // parse notes.
+    let notes = receipt.extraction_error.clone();
+
+    match receipt.status {
+        ExtractionStatus::Pending | ExtractionStatus::Extracting => view! {
+            <Notice tone=Tone::Quiet>
+                <div class="flex items-center gap-2">
+                    <Spinner />
+                    "Reading the receipt…"
+                </div>
+            </Notice>
+        }
+        .into_any(),
+
+        ExtractionStatus::Failed => view! {
+            <Notice tone=Tone::Bad>
+                <p class="mb-2 font-semibold">"Could not read this receipt"</p>
+                <p class="mb-3 text-sm">
+                    {notes.unwrap_or_else(|| "The model gave up on it.".to_string())}
+                </p>
+                <button
+                    type="button"
+                    class=BUTTON
+                    disabled=pending
+                    on:click=move |_| {
+                        retry.dispatch(id);
+                    }
+                >
+                    {move || if pending() { "Retrying…" } else { "Retry extraction" }}
+                </button>
+            </Notice>
+        }
+        .into_any(),
+
+        ExtractionStatus::Done => {
+            let problems = receipt.problems();
+            view! {
+                {(!problems.is_empty())
+                    .then(|| {
+                        view! {
+                            <Notice tone=Tone::Bad>
+                                <p class="mb-2 font-semibold">"Needs attention"</p>
+                                <ul class="list-disc pl-5 text-sm">
+                                    {problems
+                                        .iter()
+                                        .map(|p| view! { <li>{p.clone()}</li> })
+                                        .collect_view()}
+                                </ul>
+                            </Notice>
+                        }
+                    })}
+                {notes.map(|n| view! { <Notice tone=Tone::Quiet>"Extraction notes: " {n}</Notice> })}
+            }
+                .into_any()
+        }
+    }
+}
+
 /// Merchant, date and total as they currently stand — what you'd check first.
 #[component]
 fn ReceiptHeading(receipt: Receipt) -> impl IntoView {
@@ -255,10 +319,8 @@ fn ReceiptHeading(receipt: Receipt) -> impl IntoView {
             </h1>
             <p class="text-sm text-muted">
                 {receipt.purchased_on.to_string()} " · "
-                {match receipt.total {
-                    Some(t) => money(t, &receipt.currency),
-                    None => "no total".to_string(),
-                }} {receipt.reviewed.then_some(" · checked")}
+                {total_or_why(receipt.total, &receipt.currency, receipt.status)}
+                {receipt.reviewed.then_some(" · checked")}
             </p>
         </div>
     }
