@@ -42,8 +42,12 @@ pub struct Candidate {
     pub currency: String,
     /// Why it's being offered — "exact amount", "same day".
     pub why: String,
+    /// The statement's line for the charge names this merchant. Only ever
+    /// evidence for the receipt: most lines name nothing recognisable, so a
+    /// `false` says nothing either way.
+    pub same_merchant: bool,
     /// Good enough to have been matched on its own. Two of these means neither
-    /// was.
+    /// was, unless the merchant tells them apart.
     pub confident: bool,
 }
 

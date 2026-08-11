@@ -68,6 +68,7 @@ pub async fn import(
         let untaken = free.iter().filter(|receipt| !taken.contains(&receipt.id));
         let proposed = matching::automatic(&matching::candidates(
             charge.charged_on,
+            &charge.description,
             charge.amount,
             currency,
             untaken,
@@ -137,9 +138,13 @@ pub async fn load(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<dto::Statemen
             description: row.description.clone(),
             amount: row.amount,
             suggestions: match resolution {
-                dto::Resolution::Unresolved => {
-                    matching::candidates(row.charged_on, row.amount, currency, &free)
-                }
+                dto::Resolution::Unresolved => matching::candidates(
+                    row.charged_on,
+                    &row.description,
+                    row.amount,
+                    currency,
+                    &free,
+                ),
                 // Nothing to suggest once something accounts for it; the screen
                 // offers a way back to unresolved instead.
                 _ => Vec::new(),
