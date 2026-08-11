@@ -58,15 +58,34 @@ const DEFAULT_OCR_CONTEXT: u32 = 8192;
 /// exceeds what the 12B model leaves free, so it splits the OCR model across
 /// CPU and GPU instead. Measured on a 12 GB 3060 with both models resident: the
 /// split put 1146 MiB of a ~2.0 GB model on the GPU while 2740 MiB sat unused,
-/// so what was short was the projection, not the card. The OCR model reloads on
-/// every keep-alive expiry, so that arithmetic is re-run constantly rather than
-/// being one unlucky load.
+/// so what was short was the projection, not the card. That arithmetic runs on
+/// every load, not once, so it was re-decided each time the model came back from
+/// an idle unload — see [`DEFAULT_KEEP_ALIVE`], which now stops it unloading at
+/// all.
+///
+/// Forced, the same model loads fully resident at 1.3 GB — *less* than the
+/// 1.9 GB the split took, because splitting layers across backends allocates
+/// compute buffers on both of them. The configuration Ollama was avoiding is
+/// cheaper than the one it chose.
 ///
 /// 99 is the conventional "all of them" — Ollama clamps it to the layer count.
 /// The tradeoff is that this removes the safety net: if the GPU genuinely
 /// hasn't room, the runner now fails to load rather than quietly falling back
 /// to a slow CPU split.
 const OCR_GPU_LAYERS: u32 = 99;
+
+/// How long Ollama holds these models in VRAM after a request, its `keep_alive`.
+/// Negative means never unload, and that is the default here: Ollama's own
+/// default drops a model after five minutes idle, so the first receipt after any
+/// quiet spell pays a cold load — which for the OCR model is also when its
+/// placement is re-decided (see [`OCR_GPU_LAYERS`]).
+///
+/// Spelled with a unit because the string form is parsed as a duration, so a
+/// bare `-1` has nothing to parse; rig requires a string here and rejects a
+/// number outright. Set `OLLAMA_KEEP_ALIVE` empty to leave the server's default
+/// alone, which is what you want if something else shares the GPU and needs the
+/// models to get out of the way.
+const DEFAULT_KEEP_ALIVE: &str = "-1m";
 
 /// Downscale only, and about cost rather than accuracy — the OCR model reads this
 /// receipt anywhere from 1024 to 5096 pixels. Past this it's just tiled into more
@@ -214,6 +233,9 @@ pub struct Config {
     /// Context window for [`Self::ocr_model`], big enough for the photo and the
     /// transcript it comes back as.
     pub ocr_context: u32,
+    /// Ollama's `keep_alive` for both models. `None` leaves the server's default
+    /// in place; otherwise it's a duration string, negative to never unload.
+    pub keep_alive: Option<String>,
     pub max_image_edge: u32,
 }
 
@@ -221,6 +243,8 @@ impl Config {
     pub fn from_env() -> Self {
         let ocr_model =
             std::env::var("OLLAMA_OCR_MODEL").unwrap_or_else(|_| DEFAULT_OCR_MODEL.to_string());
+        let keep_alive =
+            std::env::var("OLLAMA_KEEP_ALIVE").unwrap_or_else(|_| DEFAULT_KEEP_ALIVE.to_string());
 
         Self {
             url: std::env::var("OLLAMA_URL").unwrap_or_else(|_| DEFAULT_URL.to_string()),
@@ -231,6 +255,7 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(DEFAULT_OCR_CONTEXT),
+            keep_alive: Some(keep_alive).filter(|k| !k.trim().is_empty()),
             max_image_edge: std::env::var("MAX_IMAGE_EDGE")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -267,6 +292,16 @@ impl OllamaExtractor {
             .build()
             .map_err(|e| ExtractError::Prompt(e.to_string()))?;
 
+        // Both models get the same residency policy, and it has to ride along on
+        // every request: `keep_alive` restarts the clock per call rather than
+        // being a property of the loaded model, so sending it once wouldn't hold.
+        let with_keep_alive = |mut params: serde_json::Value| {
+            if let Some(keep_alive) = &config.keep_alive {
+                params["keep_alive"] = serde_json::Value::String(keep_alive.clone());
+            }
+            params
+        };
+
         let agent = client
             .agent(&config.model)
             .preamble(PROMPT)
@@ -286,7 +321,7 @@ impl OllamaExtractor {
             // same request produced a fully correct receipt in 335 tokens and
             // 10s. rig lifts `think` out of `additional_params` to the
             // top-level Ollama field.
-            .additional_params(serde_json::json!({ "think": false }))
+            .additional_params(with_keep_alive(serde_json::json!({ "think": false })))
             // Maps to Ollama's `num_predict`.
             .max_tokens(MAX_OUTPUT_TOKENS)
             .output_schema::<ExtractedReceipt>()
@@ -304,10 +339,10 @@ impl OllamaExtractor {
                 .temperature(0.0)
                 .max_tokens(MAX_OUTPUT_TOKENS)
                 // rig lifts `num_ctx` into Ollama's `options`.
-                .additional_params(serde_json::json!({
+                .additional_params(with_keep_alive(serde_json::json!({
                     "num_ctx": config.ocr_context,
                     "num_gpu": OCR_GPU_LAYERS,
-                }))
+                })))
                 .build()
         });
 

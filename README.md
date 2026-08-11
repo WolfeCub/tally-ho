@@ -26,6 +26,7 @@ one to turn the text into line items.
 | `OLLAMA_VISION_MODEL` | `gemma4:12b` |
 | `OLLAMA_OCR_MODEL` | `glm-ocr:q8_0` — empty to let the vision model read the photo itself |
 | `OLLAMA_OCR_CONTEXT` | `8192` — `num_ctx` for the OCR model; too small silently truncates the transcript |
+| `OLLAMA_KEEP_ALIVE` | `-1m` — how long Ollama holds the models in VRAM; negative never unloads, empty leaves the server's default |
 | `MAX_IMAGE_EDGE` | `1600` — longest edge a photo is downscaled to before it's read |
 | `CURRENCY` | `USD` — the ISO code your statements are in |
 | `DATABASE_URL` | `sqlite:./data/tally-ho.db` |

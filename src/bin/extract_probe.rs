@@ -39,11 +39,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::from_env();
     println!(
-        "model={} url={} max_edge={} ocr_context={}\n",
+        "model={} url={} max_edge={} ocr_context={} keep_alive={}\n",
         config.label(),
         config.url,
         config.max_image_edge,
-        config.ocr_context
+        config.ocr_context,
+        config.keep_alive.as_deref().unwrap_or("<server default>")
     );
 
     let extractor = OllamaExtractor::new(config)?;
