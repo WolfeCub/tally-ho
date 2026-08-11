@@ -186,14 +186,6 @@ fn Caveats(matched: Matched, amount: Decimal, shared: Shared) -> impl IntoView {
         .into_any()
 }
 
-/// Whether a charge is waiting on the model, which is what the screen polls on.
-pub fn still_reading(charge: &Charge) -> bool {
-    charge
-        .resolution
-        .receipt()
-        .is_some_and(|matched| !matched.status.is_terminal())
-}
-
 #[component]
 fn Review(receipt_id: Uuid, statement_id: Uuid, label: &'static str) -> impl IntoView {
     view! {

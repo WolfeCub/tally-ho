@@ -419,6 +419,15 @@ pub async fn get_statement(id: Uuid) -> Result<dto::Statement, ServerFnError> {
         .map_err(ServerFnError::new)
 }
 
+/// Poll target while a receipt photographed onto this statement is being read.
+#[server]
+pub async fn statement_reading(id: Uuid) -> Result<bool, ServerFnError> {
+    crate::server::statements::reading(&mut db(), id)
+        .await
+        .context("could not check the statement")
+        .map_err(ServerFnError::new)
+}
+
 /// Records what a human decided about one charge.
 ///
 /// JSON, not the default form encoding: "split evenly" is `NoReceipt` with a

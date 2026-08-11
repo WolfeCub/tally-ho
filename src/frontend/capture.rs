@@ -6,8 +6,8 @@ use leptos::web_sys::{FormData, SubmitEvent};
 use crate::frontend::components::{
     AS_BUTTON, BUTTON, CameraIcon, Spinner, StepBar, Verdict, form_element,
 };
-use crate::frontend::poll::poll_while;
-use crate::shared::api::{receipt_status, upload_receipt};
+use crate::frontend::poll::{extraction_status, poll_while};
+use crate::shared::api::upload_receipt;
 use crate::shared::dto::ExtractionStatus;
 
 /// How far the upload has got, or `None` before there is one. Derived in one
@@ -71,15 +71,7 @@ pub fn CapturePage() -> impl IntoView {
     // Extraction runs in the background, so the only way to know it finished is
     // to ask. Ticking a signal re-runs the resource.
     let tick = RwSignal::new(0u32);
-    let status = Resource::new(
-        move || (receipt_id.get(), tick.get()),
-        |(id, _)| async move {
-            match id {
-                Some(id) => receipt_status(id).await.ok(),
-                None => None,
-            }
-        },
-    );
+    let status = extraction_status(move || receipt_id.get(), tick);
 
     let stage = Memo::new(move |_| {
         if upload.pending().get() {

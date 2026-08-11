@@ -184,6 +184,30 @@ pub async fn spare(db: &mut toasty::Db, limit: usize) -> toasty::Result<Vec<dto:
     Ok(out)
 }
 
+/// Whether a receipt any of these charges points at is still being read.
+///
+/// The reconcile screen's poll target, and two queries rather than the whole
+/// statement — which is a receipt and its line items per charge, and would
+/// rebuild every row on screen each time it landed.
+pub async fn reading(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<bool> {
+    let statement = models::Statement::get_by_id(db, &id).await?;
+    let matched: HashSet<Uuid> = statement
+        .charges()
+        .exec(db)
+        .await?
+        .into_iter()
+        .filter_map(|charge| charge.receipt_id)
+        .collect();
+
+    // Every receipt rather than one query each, for the same reason as
+    // [`spoken_for`]: toasty has no `IN`, and there are a few hundred rows.
+    Ok(models::Receipt::all()
+        .exec(db)
+        .await?
+        .into_iter()
+        .any(|r| matched.contains(&r.id) && !mappers::to_dto_status(&r.status).is_terminal()))
+}
+
 /// Records what a human decided about one charge.
 pub async fn resolve(
     db: &mut toasty::Db,
@@ -447,6 +471,50 @@ mod tests {
         .await
         .unwrap_err();
         assert!(format!("{err}").contains("already accounts"), "{err}");
+    }
+
+    /// The reconcile screen stops asking when this says so, so it has to answer
+    /// for the receipts its own charges point at, and only those.
+    #[tokio::test]
+    async fn reading_follows_the_receipts_these_charges_point_at() {
+        use crate::server::models::ExtractionStatus;
+
+        let mut db = memory_db().await;
+        let (josh, ash) = people(&mut db).await;
+        let receipt_id = costco(&mut db, josh, ash).await;
+
+        let parsed = parse::charges(CSV.as_bytes()).unwrap();
+        let id = import(&mut db, "july.csv", "USD", &parsed).await.unwrap();
+
+        // Created without a status, which is `Pending`: still being read, and
+        // proposed against the Costco charge.
+        assert!(reading(&mut db, id).await.unwrap());
+
+        let mut matched = Receipt::get_by_id(&mut db, &receipt_id).await.unwrap();
+        toasty::update!(matched {
+            status: ExtractionStatus::Done
+        })
+        .exec(&mut db)
+        .await
+        .unwrap();
+        assert!(!reading(&mut db, id).await.unwrap());
+
+        // Somebody else's receipt, mid-extraction, accounts for none of these
+        // charges — and must not keep this statement polling for ever.
+        toasty::create!(Receipt {
+            purchased_on: jiff::civil::date(2026, 7, 9),
+            merchant: "Elsewhere",
+            currency: "USD",
+            image_path: "b.jpg",
+            status: ExtractionStatus::Extracting,
+        })
+        .exec(&mut db)
+        .await
+        .unwrap();
+        assert!(
+            !reading(&mut db, id).await.unwrap(),
+            "not on this statement"
+        );
     }
 
     /// Nothing cascades, so a deleted receipt would otherwise leave a charge

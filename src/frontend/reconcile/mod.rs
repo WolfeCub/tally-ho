@@ -13,15 +13,15 @@ use crate::frontend::components::{
     loading,
 };
 use crate::frontend::money::{money, money_total, shares_line};
-use crate::frontend::poll::poll_while;
+use crate::frontend::poll::poll_until_settled;
 use crate::frontend::route::id_param;
 use crate::frontend::text::plural;
 use crate::shared::api::{
     delete_statement, get_statement, import_statement, list_statements, resolve_charge,
-    spare_receipts,
+    spare_receipts, statement_reading,
 };
 use crate::shared::dto::{Imported, ReceiptSummary, Resolve, Statement, StatementSummary};
-use charge::{ChargeRow, Shared, still_reading};
+use charge::{ChargeRow, Shared};
 
 #[component]
 pub fn StatementsPage() -> impl IntoView {
@@ -173,28 +173,44 @@ fn StatementRows(rows: Vec<StatementSummary>) -> impl IntoView {
 pub fn ReconcilePage() -> impl IntoView {
     let id = id_param();
 
-    // A receipt photographed here is attached while the model is still reading it,
-    // and nothing pushes the result down when it lands — so ask again until it has.
-    let tick = RwSignal::new(0u32);
     // Both in one resource: the picker offers the receipts nothing accounts for,
     // and a stale list would offer one that was just used.
-    let data = Resource::new(
+    let data = Resource::new(id, |id| async move {
+        let Some(id) = id else { return Ok(None) };
+        let statement = get_statement(id).await?;
+        let spare = spare_receipts(100).await?;
+        Ok::<_, ServerFnError>(Some((statement, spare)))
+    });
+
+    // A receipt photographed here is attached while the model is still reading
+    // it, and nothing pushes the result down when it lands. Only that one
+    // question is polled: re-asking for the statement rebuilds every row on a
+    // timer, which resets the "hide what's done" box while you're using it.
+    let tick = RwSignal::new(0u32);
+    let reading = Resource::new(
         move || (id(), tick.get()),
         |(id, _)| async move {
-            let Some(id) = id else { return Ok(None) };
-            let statement = get_statement(id).await?;
-            let spare = spare_receipts(100).await?;
-            Ok::<_, ServerFnError>(Some((statement, spare)))
+            match id {
+                Some(id) => statement_reading(id).await.ok(),
+                None => None,
+            }
         },
     );
+    poll_until_settled(
+        tick,
+        move || reading.get().flatten(),
+        move || data.refetch(),
+    );
 
-    // A refetch in flight reads as `None`, which is no answer at all — hold the
-    // last real one, or polling would stop itself on its own first tick.
-    let waiting = Memo::new(move |prev: Option<&bool>| match data.get() {
-        Some(Ok(Some((statement, _)))) => statement.charges.iter().any(still_reading),
-        _ => prev.copied().unwrap_or(false),
-    });
-    poll_while(tick, move || waiting.get());
+    // Every decision reloads the statement. A photograph also starts a job the
+    // poll above has to be told to go looking for.
+    let reload = move || {
+        data.refetch();
+        tick.update(|t| *t += 1);
+    };
+
+    // Out here so it survives those reloads.
+    let hide_done = RwSignal::new(false);
 
     view! {
         // Transition rather than Suspense: every decision refetches, and a
@@ -206,7 +222,7 @@ pub fn ReconcilePage() -> impl IntoView {
                     Ok(None) => failed("Not a valid statement id."),
                     Ok(Some((statement, spare))) => {
                         view! {
-                            <StatementView statement spare reload=move || data.refetch() />
+                            <StatementView statement spare reload hide_done />
                         }
                             .into_any()
                     }
@@ -221,6 +237,10 @@ fn StatementView(
     statement: Statement,
     spare: Vec<ReceiptSummary>,
     reload: impl Fn() + Copy + Send + Sync + 'static,
+    /// Owned by the page, not this view — every decision reloads the statement,
+    /// and a filter that quietly turned itself off each time would be worse than
+    /// not having one.
+    hide_done: RwSignal<bool>,
 ) -> impl IntoView {
     let id = statement.id;
     let resolve = Action::new(|&(charge_id, how): &(Uuid, Resolve)| resolve_charge(charge_id, how));
@@ -247,7 +267,6 @@ fn StatementView(
         statement_id: id,
     };
     let charges = StoredValue::new(statement.charges.clone());
-    let hide_done = RwSignal::new(false);
 
     view! {
         <Summary statement />
@@ -255,9 +274,12 @@ fn StatementView(
         {move || error_of(resolve).map(|e| view! { <Notice tone=Tone::Bad>{e.to_string()}</Notice> })}
 
         <label class="mb-2 flex items-center gap-2 text-sm text-muted">
+            // `prop:` and not the attribute: the attribute is only the starting
+            // state, so the box would drift from the filter it stands for.
             <input
                 type="checkbox"
                 class="size-4"
+                prop:checked=move || hide_done.get()
                 on:change:target=move |ev| hide_done.set(ev.target().checked())
             />
             "Hide what's done"

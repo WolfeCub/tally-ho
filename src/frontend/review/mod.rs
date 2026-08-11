@@ -15,7 +15,7 @@ use crate::frontend::components::{
     BUTTON, DANGER, LabeledInput, Notice, PRIMARY, ReceiptPhoto, Spinner, Tone, confirm, failed,
     field, form_element, loading,
 };
-use crate::frontend::poll::poll_while;
+use crate::frontend::poll::{extraction_status, poll_until_settled};
 use crate::frontend::route::id_param;
 use crate::frontend::text::total_or_why;
 use crate::shared::api::{
@@ -43,30 +43,32 @@ pub fn ReviewPage() -> impl IntoView {
             .filter(|href| href.starts_with('/'))
     };
 
-    // A receipt can still be extracting when this screen opens — a fresh upload
-    // followed here, or a retry from here — so re-ask on a tick until it settles.
-    // Re-asking for the receipt rather than just its status: what changes when
-    // extraction finishes is the receipt, and that's what the screen draws.
-    let tick = RwSignal::new(0u32);
     // Both in one resource: without the people list the assignment dropdowns
     // would quietly come up empty, which reads as "nobody to charge this to".
-    let receipt = Resource::new(
-        move || (id(), tick.get()),
-        |(id, _)| async move {
-            let Some(id) = id else { return Ok(None) };
-            let receipt = get_receipt(id).await?;
-            let people = list_people().await?;
-            Ok::<_, ServerFnError>(Some((receipt, people)))
-        },
+    let receipt = Resource::new(id, |id| async move {
+        let Some(id) = id else { return Ok(None) };
+        let receipt = get_receipt(id).await?;
+        let people = list_people().await?;
+        Ok::<_, ServerFnError>(Some((receipt, people)))
+    });
+
+    // A receipt can still be extracting when this screen opens — a fresh upload
+    // followed here, or a retry from here — and what it lands on replaces the
+    // whole form, so it's loaded once, when there's finally something to load.
+    let tick = RwSignal::new(0u32);
+    let status = extraction_status(id, tick);
+    poll_until_settled(
+        tick,
+        move || status.get().flatten().map(|s| !s.is_terminal()),
+        move || receipt.refetch(),
     );
 
-    // A refetch in flight reads as `None`, which is no answer at all — hold the
-    // last real one, or polling would stop itself on its own first tick.
-    let extracting = Memo::new(move |prev: Option<&bool>| match receipt.get() {
-        Some(Ok(Some((r, _)))) => !r.status.is_terminal(),
-        _ => prev.copied().unwrap_or(false),
-    });
-    poll_while(tick, move || extracting.get());
+    // Saving and reviewing just want the receipt back. A retry also needs the
+    // status asked again, or nothing would notice the job it just started.
+    let reload = move || {
+        receipt.refetch();
+        tick.update(|t| *t += 1);
+    };
 
     view! {
         {move || {
@@ -87,8 +89,7 @@ pub fn ReviewPage() -> impl IntoView {
                     Err(e) => failed(e),
                     Ok(None) => failed("Not a valid receipt id."),
                     Ok(Some((r, people))) => {
-                        view! { <ReviewForm receipt=r people reload=move || receipt.refetch() /> }
-                            .into_any()
+                        view! { <ReviewForm receipt=r people reload /> }.into_any()
                     }
                 }
             })}
@@ -106,7 +107,8 @@ fn ReviewForm(
     reload: impl Fn() + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
     let id = receipt.id;
-    // As fresh as the poll above: the form is rebuilt on every load.
+    // Off the loaded receipt rather than the polled status: the page reloads it
+    // as extraction settles, so this can't be stale for longer than that.
     let extracting = !receipt.status.is_terminal();
     let reviewed = receipt.reviewed;
     let has_total = receipt.total.is_some();
@@ -117,8 +119,7 @@ fn ReviewForm(
     let discard = Action::new(|id: &Uuid| delete_receipt(*id));
     let retry = Action::new(|id: &Uuid| retry_extraction(*id));
 
-    // A retry reloads too: picking up its `Pending` status is what starts the
-    // polling, and nothing else would notice the job it just started.
+    // All three end the same way: with whatever the server now has.
     Effect::new(move |_| {
         if succeeded(save) || succeeded(review) || succeeded(retry) {
             reload();
