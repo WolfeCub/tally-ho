@@ -5,9 +5,10 @@ use leptos::web_sys::SubmitEvent;
 use uuid::Uuid;
 
 use crate::frontend::actions::{error_of, succeeded};
-use crate::frontend::components::{BUTTON, INPUT, Notice, PRIMARY, Tone, failed, loading};
-use crate::shared::api::{list_people, save_people};
-use crate::shared::dto::{Person, PersonSave};
+use crate::frontend::components::{BUTTON, Bar, INPUT, Notice, PRIMARY, Tone, failed, loading};
+use crate::frontend::text::bytes;
+use crate::shared::api::{disk_usage, list_people, save_people};
+use crate::shared::dto::{DiskUsage, Person, PersonSave};
 
 #[component]
 pub fn SettingsPage() -> impl IntoView {
@@ -37,6 +38,67 @@ pub fn SettingsPage() -> impl IntoView {
                 })}
             </Transition>
         </section>
+
+        <Info />
+    }
+}
+
+/// Facts about the running app rather than anything to change — room left first,
+/// since that's the one that eventually needs acting on.
+#[component]
+fn Info() -> impl IntoView {
+    let disk = Resource::new(|| (), |_| disk_usage());
+
+    view! {
+        <section class="mt-10">
+            <h2 class="font-semibold">"Info"</h2>
+
+            <Transition fallback=loading>
+                {move || Suspend::new(async move {
+                    match disk.await {
+                        Err(e) => failed(e),
+                        Ok(disk) => view! { <DiskRow disk /> }.into_any(),
+                    }
+                })}
+            </Transition>
+        </section>
+    }
+}
+
+/// Room left where the photos and the database live — the mounted volume, in the
+/// container, so this is what says whether the claim needs growing.
+#[component]
+fn DiskRow(disk: DiskUsage) -> impl IntoView {
+    let used = disk.total_bytes.saturating_sub(disk.available_bytes);
+    // A zero total means the filesystem told us nothing useful; don't divide by it.
+    let percent = match disk.total_bytes {
+        0 => 0,
+        total => (used * 100 / total) as usize,
+    };
+    // Amber would be a third colour for a distinction nobody acts on: either
+    // there's room or it's time to grow the volume.
+    let tight = percent >= 90;
+
+    view! {
+        <div class="mt-3 rounded-lg border border-edge bg-surface p-3">
+            <div class="flex flex-wrap items-baseline justify-between gap-x-3">
+                <span>"Disk space"</span>
+                <span class=if tight { "tabular-nums text-danger" } else { "tabular-nums" }>
+                    {format!("{} free", bytes(disk.available_bytes))}
+                </span>
+            </div>
+
+            <Bar percent fill=if tight { "bg-danger" } else { "bg-good" } />
+
+            <p class="mt-1 text-xs text-muted">
+                {format!(
+                    "{} of {} used · {}",
+                    bytes(used),
+                    bytes(disk.total_bytes),
+                    disk.path,
+                )}
+            </p>
+        </div>
     }
 }
 

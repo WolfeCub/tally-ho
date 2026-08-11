@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 use crate::frontend::actions::{error_of, succeeded};
 use crate::frontend::components::{
-    AS_BUTTON, BUTTON, DANGER, INPUT, Notice, PRIMARY, Tone, confirm, failed, form_element, loading,
+    AS_BUTTON, BUTTON, Bar, DANGER, INPUT, Notice, PRIMARY, Tone, confirm, failed, form_element,
+    loading,
 };
 use crate::frontend::money::{money, money_total, shares_line};
 use crate::frontend::poll::poll_while;
@@ -309,49 +310,47 @@ fn Summary(statement: Statement) -> impl IntoView {
     let owed = shares_line(&statement.totals(), &statement.people, &currency);
 
     view! {
-        <div class="mb-4 rounded-lg border border-edge bg-surface p-4">
-            <div class="sm:flex sm:items-start sm:justify-between sm:gap-4">
-                <div class="min-w-0">
-                    <p class="truncate text-sm text-muted">
-                        {statement.label.clone()} " · " {statement.begins_on.to_string()} " – "
-                        {statement.ends_on.to_string()}
-                    </p>
-                    <p class="text-3xl font-semibold tabular-nums">
-                        {money_total(statement.total(), &currency)}
-                    </p>
-                    <p class="mt-1 tabular-nums">{owed}</p>
-                </div>
-                // `download` is required: leptos_router intercepts same-origin
-                // anchors without it and navigates the SPA to the URL, which
-                // renders the not-found page.
-                <a
-                    href=format!("/statement/{}/export.csv", statement.id)
-                    download
-                    class=format!("{BUTTON} {AS_BUTTON} mt-3 shrink-0 sm:mt-0")
-                >
-                    "Export CSV"
-                </a>
-            </div>
-
-            <p class="mt-3 text-sm text-muted">
-                {format!("{done} of {count} accounted for")}
-            </p>
-            <div class="mt-1 h-1 rounded bg-edge">
-                <div class="h-1 rounded bg-good" style=format!("width:{percent}%")></div>
-            </div>
-
-            {(left > 0)
-                .then(|| {
-                    view! {
-                        <p class="mt-2 text-sm text-danger">
-                            {format!(
-                                "{} still to go, so the figures above are {} short of the statement.",
-                                plural(left, "charge"),
-                                money(short, &currency),
-                            )}
+            <div class="mb-4 rounded-lg border border-edge bg-surface p-4">
+                <div class="sm:flex sm:items-start sm:justify-between sm:gap-4">
+                    <div class="min-w-0">
+                        <p class="truncate text-sm text-muted">
+                            {statement.label.clone()} " · " {statement.begins_on.to_string()} " – "
+                            {statement.ends_on.to_string()}
                         </p>
-                    }
-                })}
-        </div>
-    }
+                        <p class="text-3xl font-semibold tabular-nums">
+                            {money_total(statement.total(), &currency)}
+                        </p>
+                        <p class="mt-1 tabular-nums">{owed}</p>
+                    </div>
+                    // `download` is required: leptos_router intercepts same-origin
+                    // anchors without it and navigates the SPA to the URL, which
+                    // renders the not-found page.
+                    <a
+                        href=format!("/statement/{}/export.csv", statement.id)
+                        download
+                        class=format!("{BUTTON} {AS_BUTTON} mt-3 shrink-0 sm:mt-0")
+                    >
+                        "Export CSV"
+                    </a>
+                </div>
+
+                <p class="mt-3 text-sm text-muted">
+                    {format!("{done} of {count} accounted for")}
+                </p>
+    <Bar percent />
+
+                {(left > 0)
+                    .then(|| {
+                        view! {
+                            <p class="mt-2 text-sm text-danger">
+                                {format!(
+                                    "{} still to go, so the figures above are {} short of the statement.",
+                                    plural(left, "charge"),
+                                    money(short, &currency),
+                                )}
+                            </p>
+                        }
+                    })}
+            </div>
+        }
 }

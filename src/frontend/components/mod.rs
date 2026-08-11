@@ -1,6 +1,7 @@
 //! The pieces the screens are built from — anything more than one screen needs,
 //! or that would otherwise bury a screen's own markup.
 
+mod bar;
 mod form;
 mod icons;
 mod notice;
@@ -8,6 +9,7 @@ mod photo;
 mod receipt_rows;
 mod steps;
 
+pub use bar::Bar;
 pub use form::{LabeledInput, confirm, field, form_element};
 pub use icons::{CameraIcon, Spinner, Verdict};
 pub use notice::{Notice, Tone, failed, loading};

@@ -142,6 +142,19 @@ pub async fn retry_extraction(id: Uuid) -> Result<(), ServerFnError> {
     Ok(())
 }
 
+/// Room left on the volume the photos and the database sit on.
+#[server]
+pub async fn disk_usage() -> Result<dto::DiskUsage, ServerFnError> {
+    use crate::server::state::AppState;
+
+    let state = expect_context::<AppState>();
+    let root = state.store.root();
+
+    crate::server::disk::usage(root)
+        .with_context(|| format!("could not read the free space at {}", root.display()))
+        .map_err(ServerFnError::new)
+}
+
 /// Parses a human-typed amount, distinguishing "cleared" from "unparseable".
 #[cfg(feature = "ssr")]
 fn optional_money(field: &str, raw: &str) -> Result<Option<rust_decimal::Decimal>, ServerFnError> {

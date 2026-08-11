@@ -7,8 +7,10 @@
 //! Shapes only. What they mean lives next door: [`crate::shared::problems`],
 //! [`crate::shared::reconcile`], [`crate::shared::export`].
 
+mod info;
 mod receipt;
 mod statement;
 
+pub use info::*;
 pub use receipt::*;
 pub use statement::*;
