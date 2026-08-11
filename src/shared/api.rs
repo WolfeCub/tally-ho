@@ -479,17 +479,13 @@ pub async fn recent_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, S
         .context("could not load receipts")
         .map_err(ServerFnError::new)?;
 
-    let mut out = Vec::with_capacity(receipts.len());
-    for receipt in receipts {
-        let items = receipt
-            .line_items()
-            .exec(&mut db)
-            .await
-            .context("could not load line items")
-            .map_err(ServerFnError::new)?;
-        out.push(crate::server::mappers::to_dto_summary(&receipt, &items));
-    }
-    Ok(out)
+    Ok(crate::server::query::with_items(&mut db, receipts)
+        .await
+        .context("could not load line items")
+        .map_err(ServerFnError::new)?
+        .iter()
+        .map(|(receipt, items)| crate::server::mappers::to_dto_summary(receipt, items))
+        .collect())
 }
 
 /// Full receipt with line items, for the review screen.

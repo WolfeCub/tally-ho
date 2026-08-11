@@ -3,15 +3,40 @@
 
 use crate::server::models;
 
+/// Receipts with their line items, in the order they came in.
+///
+/// One query for the lot, grouped in memory. toasty has no join or `IN` loading,
+/// so the obvious way to write this is a query per receipt — which the list
+/// screen would then run a hundred of, every time it polls while something is
+/// being read. Reading the line-item table whole is a few thousand rows against
+/// a local SQLite file, and it doesn't grow with the size of the batch.
+pub async fn with_items(
+    db: &mut toasty::Db,
+    receipts: Vec<models::Receipt>,
+) -> toasty::Result<Vec<(models::Receipt, Vec<models::LineItem>)>> {
+    if receipts.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut items: std::collections::HashMap<uuid::Uuid, Vec<models::LineItem>> =
+        std::collections::HashMap::new();
+    for item in models::LineItem::all().exec(db).await? {
+        items.entry(item.receipt_id).or_default().push(item);
+    }
+
+    Ok(receipts
+        .into_iter()
+        .map(|receipt| {
+            let items = items.remove(&receipt.id).unwrap_or_default();
+            (receipt, items)
+        })
+        .collect())
+}
+
 /// Receipts purchased in an inclusive date range, each with its line items.
 ///
 /// `purchased_on` is indexed and stored as ISO-8601 TEXT, which sorts
 /// lexicographically, so `>=`/`<=` and `ORDER BY` are both correct on SQLite.
-///
-/// The line items are fetched per receipt — one query each. toasty has no join
-/// or `IN` loading, and a statement period holds tens of receipts against a
-/// local SQLite file, so the N+1 is cheaper than the raw-SQL escape hatch it
-/// would take to avoid.
 pub async fn load_range(
     db: &mut toasty::Db,
     from: jiff::civil::Date,
@@ -27,12 +52,7 @@ pub async fn load_range(
     .exec(db)
     .await?;
 
-    let mut out = Vec::with_capacity(receipts.len());
-    for receipt in receipts {
-        let items = receipt.line_items().exec(db).await?;
-        out.push((receipt, items));
-    }
-    Ok(out)
+    with_items(db, receipts).await
 }
 
 /// A review-screen save, with every field already parsed.
@@ -296,13 +316,16 @@ mod tests {
         .await
         .unwrap();
 
-        // Outside the range.
+        // Outside the range, and with items of its own: they are loaded in the
+        // same sweep as everyone else's, so this is what catches them being
+        // handed to the wrong receipt.
         toasty::create!(Receipt {
             purchased_on: jiff::civil::date(2026, 8, 1),
             merchant: "Next month",
             total: dec("999.00"),
             currency: "USD",
             image_path: "c.jpg",
+            line_items: [{ description: "Not ours", total: dec("999.00"), position: 0 }],
         })
         .exec(&mut db)
         .await

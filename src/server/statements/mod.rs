@@ -165,23 +165,20 @@ pub async fn load(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<dto::Statemen
 /// charge that paid for it.
 pub async fn spare(db: &mut toasty::Db, limit: usize) -> toasty::Result<Vec<dto::ReceiptSummary>> {
     let taken = spoken_for(db).await?;
-    let receipts = models::Receipt::all()
+    let free: Vec<_> = models::Receipt::all()
         .order_by(models::Receipt::fields().purchased_on().desc())
         .exec(db)
-        .await?;
+        .await?
+        .into_iter()
+        .filter(|receipt| !taken.contains(&receipt.id))
+        .take(limit)
+        .collect();
 
-    let mut out = Vec::new();
-    for receipt in receipts {
-        if out.len() == limit {
-            break;
-        }
-        if taken.contains(&receipt.id) {
-            continue;
-        }
-        let items = receipt.line_items().exec(db).await?;
-        out.push(mappers::to_dto_summary(&receipt, &items));
-    }
-    Ok(out)
+    Ok(query::with_items(db, free)
+        .await?
+        .iter()
+        .map(|(receipt, items)| mappers::to_dto_summary(receipt, items))
+        .collect())
 }
 
 /// Whether a receipt any of these charges points at is still being read.
