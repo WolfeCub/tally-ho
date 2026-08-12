@@ -542,11 +542,19 @@ pub fn parse_date(raw: &str) -> Option<jiff::civil::Date> {
 /// its statements this way, and there's nothing to disambiguate once the month
 /// names itself.
 fn spelled_month(s: &str) -> Option<jiff::civil::Date> {
+    // The day of the week, if it's there, says nothing the rest of the date
+    // doesn't. Dropping it beats doubling the format list below.
+    let named_day = |field: &str| {
+        ["%a", "%A"]
+            .iter()
+            .any(|format| jiff::fmt::strtime::parse(format, field).is_ok())
+    };
+
     // Down to single spaces first, so four formats cover whatever punctuation
     // the file separates the fields with.
     let tidied = s
         .split(|c: char| c.is_whitespace() || matches!(c, ',' | '-' | '/' | '.'))
-        .filter(|field| !field.is_empty())
+        .filter(|field| !field.is_empty() && !named_day(field))
         .collect::<Vec<_>>()
         .join(" ");
 
@@ -629,6 +637,9 @@ mod tests {
         assert_eq!(parse_date("Jul 28, 2026"), Some(expected));
         assert_eq!(parse_date("July 28, 2026"), Some(expected));
         assert_eq!(parse_date("28 Jul 26"), Some(expected));
+        // A receipt that prints the day of the week too.
+        assert_eq!(parse_date("TUE JULY 28,2026"), Some(expected));
+        assert_eq!(parse_date("Tuesday, July 28, 2026"), Some(expected));
         // Still a word where the month should be.
         assert_eq!(parse_date("28 Jly 2026"), None);
     }
