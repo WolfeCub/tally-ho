@@ -5680,7 +5680,7 @@ dependencies = [
 
 [[package]]
 name = "tally-ho"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",

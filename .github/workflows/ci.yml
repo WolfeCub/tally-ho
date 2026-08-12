@@ -16,11 +16,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Don't use Cargo version. Crane names the dependency build
+      # after the version in there i.e. tally-ho-deps-0.5.1. So
+      # every release bump rebuilt all ~700 crates.
       - name: Release version
         id: meta
         if: github.ref_name == github.event.repository.default_branch
         run: |
-          version=$(sed -n '/^\[package\]/,/^\[/ s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          version=$(cat VERSION)
           # ghcr rejects uppercase, and owner names can have it.
           repository=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           echo "version=$version" >> "$GITHUB_OUTPUT"
