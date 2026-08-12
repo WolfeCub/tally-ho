@@ -1,3 +1,8 @@
+// Same reason as the one in lib.rs, and it has to be said again here: the
+// binary is its own crate, and it lays out the same views to render them
+// server-side.
+#![recursion_limit = "256"]
+
 /// Serves the stored receipt photo for the review screen.
 ///
 /// Not a server function: this returns raw image bytes, not a serialized value.

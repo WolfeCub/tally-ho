@@ -37,6 +37,7 @@ pub fn item(total: &str) -> LineItem {
         position: 0,
         edited: false,
         person_id: None,
+        guessed_why: None,
     }
 }
 

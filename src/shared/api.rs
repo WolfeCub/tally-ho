@@ -225,6 +225,26 @@ fn parse_save(save: dto::ReceiptSave) -> Result<crate::server::query::ReceiptSav
     })
 }
 
+/// Guesses who owes what from the descriptions in Settings, and hands back the
+/// receipt with whatever it decided.
+///
+/// Separate from saving because descriptions get written long after a receipt was
+/// read, and because correcting a line item is a reason to ask again.
+#[server]
+pub async fn suggest_assignments(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
+    use crate::server::state::AppState;
+
+    let state = expect_context::<AppState>();
+    let mut db = state.db.clone();
+
+    crate::server::assign::suggest(&mut db, &*state.assigner, id)
+        .await
+        .context("could not guess who owes what")
+        .map_err(ServerFnError::new)?;
+
+    load_receipt(&mut db, id).await
+}
+
 /// Everyone a line item can be charged to, by name.
 #[server]
 pub async fn list_people() -> Result<Vec<dto::Person>, ServerFnError> {

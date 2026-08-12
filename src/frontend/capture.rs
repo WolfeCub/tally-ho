@@ -17,21 +17,26 @@ enum Stage {
     Sending,
     Queued,
     Reading,
+    Assigning,
     Done,
     Failed,
 }
 
 impl Stage {
     fn working(self) -> bool {
-        matches!(self, Self::Sending | Self::Queued | Self::Reading)
+        matches!(
+            self,
+            Self::Sending | Self::Queued | Self::Reading | Self::Assigning
+        )
     }
 
-    /// Segments lit on the progress bar, out of three.
+    /// Segments lit on the progress bar, out of four.
     fn reached(self) -> usize {
         match self {
             Self::Sending => 1,
             Self::Queued | Self::Reading => 2,
-            Self::Done | Self::Failed => 3,
+            Self::Assigning => 3,
+            Self::Done | Self::Failed => 4,
         }
     }
 
@@ -40,6 +45,7 @@ impl Stage {
             Self::Sending => "Sending the photo",
             Self::Queued => "Waiting for the model",
             Self::Reading => "Reading the receipt",
+            Self::Assigning => "Working out who owes what",
             Self::Done => "Read it",
             Self::Failed => "Could not read it",
         }
@@ -49,7 +55,8 @@ impl Stage {
         match self {
             Self::Sending => "Uploading from your phone.",
             Self::Queued => "Queued behind the other photos.",
-            Self::Reading => "Usually about ten seconds.",
+            Self::Reading => "Extracting the text content",
+            Self::Assigning => "Matching the items to people.",
             Self::Done => "Check it against the photo before you rely on it.",
             Self::Failed => "The photo saved, so you can still type it in.",
         }
@@ -83,6 +90,7 @@ pub fn CapturePage() -> impl IntoView {
                 Some(ExtractionStatus::Done) => Stage::Done,
                 Some(ExtractionStatus::Failed) => Stage::Failed,
                 Some(ExtractionStatus::Extracting) => Stage::Reading,
+                Some(ExtractionStatus::Assigning) => Stage::Assigning,
                 // No status yet means the first poll hasn't landed.
                 Some(ExtractionStatus::Pending) | None => Stage::Queued,
             }),
@@ -199,7 +207,7 @@ fn Progress(
             </div>
 
             <div class="mt-4">
-                <StepBar reached=stage.reached() of=3 bad=failed />
+                <StepBar reached=stage.reached() of=4 bad=failed />
             </div>
 
             {receipt_id

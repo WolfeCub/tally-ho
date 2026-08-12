@@ -1,5 +1,7 @@
 //! Server-only code: none of this compiles into the wasm bundle.
 
+pub mod ask;
+pub mod assign;
 pub mod db;
 pub mod disk;
 pub mod env;

@@ -8,6 +8,7 @@ use uuid::Uuid;
 pub enum ExtractionStatus {
     Pending,
     Extracting,
+    Assigning,
     Done,
     Failed,
 }
@@ -31,6 +32,8 @@ pub struct LineItem {
     /// Who this is charged to. `None` is unassigned, which is also what a person
     /// being removed leaves behind.
     pub person_id: Option<Uuid>,
+    /// Set when [`Self::person_id`] is the model's guess, and says why.
+    pub guessed_why: Option<String>,
 }
 
 /// Someone line items can be charged to, as the settings screen manages them.
@@ -39,6 +42,16 @@ pub struct Person {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
+}
+
+impl Person {
+    /// Whether there's anything here to guess whose an item is from. Both the
+    /// button offering to guess and the server deciding whether to ask ask this.
+    pub fn described(&self) -> bool {
+        self.description
+            .as_deref()
+            .is_some_and(|described| !described.trim().is_empty())
+    }
 }
 
 /// One person as the settings screen left them. The screen sends everyone it

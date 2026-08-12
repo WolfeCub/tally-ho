@@ -7,8 +7,8 @@
 
 use uuid::Uuid;
 
-use crate::server::models::{ExtractionStatus, Receipt};
-
+use super::assign;
+use super::models::{ExtractionStatus, Receipt};
 use super::state::AppState;
 
 /// Spawns extraction for an already-persisted receipt and returns immediately.
@@ -71,7 +71,6 @@ async fn run(state: &AppState, receipt_id: Uuid) -> Result<(), JobError> {
         subtotal: n.subtotal,
         tax: n.tax,
         total: n.total,
-        status: ExtractionStatus::Done,
         extraction_error: note,
         model_used: Some(extraction.model.clone()),
         raw_response: Some(toasty::Json(serde_json::from_str(&extraction.raw)?)),
@@ -93,6 +92,29 @@ async fn run(state: &AppState, receipt_id: Uuid) -> Result<(), JobError> {
         .exec(&mut db)
         .await?;
     }
+
+    // The second model call, and a stage of its own on the client: the photo has
+    // been read by this point, so "reading the receipt" would be a lie for the
+    // ten seconds this takes.
+    toasty::update!(receipt {
+        status: ExtractionStatus::Assigning
+    })
+    .exec(&mut db)
+    .await?;
+
+    // A bonus rather than part of reading the receipt: if it fails the receipt is
+    // still fine, just with nobody's name on it.
+    if let Err(e) = assign::suggest(&mut db, &*state.assigner, receipt_id).await {
+        tracing::warn!(%receipt_id, error = %e, "could not guess who owes what");
+    }
+
+    // Done last, so a client that stops polling on it finds the items and the
+    // guesses already there.
+    toasty::update!(receipt {
+        status: ExtractionStatus::Done
+    })
+    .exec(&mut db)
+    .await?;
 
     Ok(())
 }

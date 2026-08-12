@@ -270,11 +270,24 @@ mod tests {
         // A second date column ahead of the plain one doesn't get picked.
         let p = parsed(
             "Date,Date Processed,Description,Card Member,Account #,Amount\n\
-             07/16/2026,07/18/2026,SAFEWAY,JOSH WOLFE,-91007,63.28\n",
+             07/16/2026,07/18/2026,SAFEWAY,A CARDHOLDER,-91007,63.28\n",
         );
         assert_eq!(p.layout.date.name, "Date");
         assert_eq!(p.charges[0].charged_on, jiff::civil::date(2026, 7, 16));
         assert_eq!(p.charges[0].amount, dec("63.28"));
+
+        // The same export with the month written out, which is how Amex dates
+        // it. Every row is the same shape, so this took the whole file down.
+        let p = parsed(
+            "Date,Date Processed,Description,Card Member,Account #,Amount\n\
+             28 Jul 2026,28 Jul 2026,MEMBERSHIP FEE INSTALLMENT,A CARDHOLDER,-01006,15.99\n\
+             28 Jul 2026,28 Jul 2026,NOODLE HOUSE        OAKVILLE,A CARDHOLDER,-01006,7.91\n",
+        );
+        assert_eq!(p.skipped, Vec::<String>::new());
+        assert_eq!(p.charges[0].charged_on, jiff::civil::date(2026, 7, 28));
+        assert_eq!(p.charges[0].description, "MEMBERSHIP FEE INSTALLMENT");
+        assert_eq!(p.charges[1].description, "NOODLE HOUSE OAKVILLE");
+        assert_eq!(p.charges[1].amount, dec("7.91"));
     }
 
     /// A refund stays negative: it belongs on the statement, and it comes off

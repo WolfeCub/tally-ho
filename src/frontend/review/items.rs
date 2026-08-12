@@ -9,10 +9,15 @@ use leptos::prelude::*;
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
-use crate::frontend::components::{BUTTON, INPUT};
+use crate::frontend::components::INPUT;
 use crate::frontend::money::money;
 use crate::frontend::text::plural;
 use crate::shared::dto::{LineItem, Person};
+
+/// A button that sits in a row rather than under one. Not the shared BUTTON:
+/// its padding would make these taller than the inputs they line up with.
+const IN_ROW: &str = "shrink-0 rounded-lg border border-edge px-3 active:bg-edge \
+                      disabled:opacity-40";
 
 /// A line item as the screen has it.
 ///
@@ -27,6 +32,9 @@ pub struct Row {
     pub total: String,
     /// Who it's charged to. `None` is unassigned, which splits evenly.
     pub person_id: Option<Uuid>,
+    /// Why the model thinks it's theirs. Shown but never sent: the server keeps
+    /// its own note, and picking somebody yourself clears it.
+    pub guessed_why: Option<String>,
 }
 
 impl Row {
@@ -40,6 +48,7 @@ impl Row {
                 description: item.description.clone(),
                 total: item.total.to_string(),
                 person_id: item.person_id,
+                guessed_why: item.guessed_why.clone(),
             })
             .collect()
     }
@@ -81,31 +90,37 @@ pub fn LineItems(
                 description: String::new(),
                 total: String::new(),
                 person_id: None,
+                guessed_why: None,
             })
         });
     };
 
-    let sum_line = move || {
+    // Blank while an amount is half-typed and doesn't parse yet.
+    let total = move || {
         let sum = typed_sum(&rows.get())?;
         let off = subtotal.filter(|stated| *stated != sum);
-        let class = if off.is_some() {
-            "mt-2 text-sm text-danger"
-        } else {
-            "mt-2 text-sm text-muted"
-        };
+        let currency = currency.get_value();
         Some(view! {
-            <p class=class>
-                "Items add up to " {money(sum, &currency.get_value())}
-                {off
-                    .map(|stated| {
-                        format!(" — the subtotal says {}", money(stated, &currency.get_value()))
-                    })}
+            // Full brightness: it's the check on the whole list, and it sat at
+            // the same weight as the guesses underneath the rows.
+            <p class="font-medium" class=("text-danger", off.is_some())>
+                "Items total: " {money(sum, &currency)}
             </p>
+            {off
+                .map(|stated| {
+                    view! {
+                        <p class="text-xs text-danger">
+                            "The subtotal says " {money(stated, &currency)}
+                        </p>
+                    }
+                })}
         })
     };
 
     view! {
-        <div class="mb-6">
+        // mb matches the row's own pt below the rule above it, so the sum and
+        // the button sit evenly between the two rules.
+        <div class="mb-3">
             <div class="mb-2 flex items-baseline justify-between gap-2">
                 <h2 class="font-semibold">"Line items"</h2>
                 <span class="text-sm text-muted">{move || plural(rows.get().len(), "item")}</span>
@@ -119,7 +134,18 @@ pub fn LineItems(
                 />
             </ul>
 
-            {sum_line}
+            // Adding a row is a small thing next to the sum, not another
+            // full-width button competing with the ones that save the receipt.
+            <div class="mt-3 flex items-center justify-between gap-3 border-t border-edge pt-3">
+                <div class="min-w-0">{total}</div>
+                <button
+                    type="button"
+                    class=format!("{IN_ROW} py-1.5 text-sm")
+                    on:click=move |_| add_row()
+                >
+                    "+ Add item"
+                </button>
+            </div>
 
             {(!has_people)
                 .then(|| {
@@ -129,15 +155,27 @@ pub fn LineItems(
                         </p>
                     }
                 })}
-
-            <button
-                type="button"
-                class=format!("{BUTTON} mt-3 w-full text-sm")
-                on:click=move |_| add_row()
-            >
-                "Add an item"
-            </button>
         </div>
+    }
+}
+
+/// The model's reason, a line at a time: it reasons its way to a name, so the
+/// whole thing can run to a couple of sentences. Tap for the rest.
+#[component]
+fn Guessed(why: String) -> impl IntoView {
+    let open = RwSignal::new(false);
+
+    view! {
+        <button
+            type="button"
+            class="w-full text-left text-xs text-muted"
+            class=("line-clamp-1", move || !open.get())
+            aria-expanded=move || open.get().to_string()
+            on:click=move |_| open.update(|open| *open = !*open)
+        >
+            "Guessed: "
+            {why}
+        </button>
     }
 }
 
@@ -170,6 +208,10 @@ fn ItemRow(row: Row, rows: RwSignal<Vec<Row>>, people: StoredValue<Vec<Person>>)
         });
     };
 
+    // This row's own, so typing in another one doesn't disturb it. Cleared when
+    // you pick somebody, which the save then agrees with server-side.
+    let guessed_why = RwSignal::new(row.guessed_why.clone());
+
     // The assignment select wraps onto its own line, so rows need a rule
     // between them to still read as rows.
     let li = if has_people {
@@ -195,7 +237,7 @@ fn ItemRow(row: Row, rows: RwSignal<Vec<Row>>, people: StoredValue<Vec<Person>>)
             />
             <button
                 type="button"
-                class="shrink-0 rounded-lg border border-edge px-3 text-muted active:bg-edge"
+                class=format!("{IN_ROW} text-muted")
                 aria-label="Remove this item"
                 on:click=move |_| rows.update(|rows| rows.retain(|row| row.key != key))
             >
@@ -212,7 +254,8 @@ fn ItemRow(row: Row, rows: RwSignal<Vec<Row>>, people: StoredValue<Vec<Person>>)
                                 edit(
                                     |row, v| row.person_id = Uuid::parse_str(&v).ok(),
                                     ev.target().value(),
-                                )
+                                );
+                                guessed_why.set(None);
                             }
                         >
                             <option value="" selected=person_id.is_none()>
@@ -220,6 +263,10 @@ fn ItemRow(row: Row, rows: RwSignal<Vec<Row>>, people: StoredValue<Vec<Person>>)
                             </option>
                             {people.with_value(|people| options(people, person_id))}
                         </select>
+
+                        // Says whose word this is, so a wrong one gets changed
+                        // rather than trusted.
+                        {move || guessed_why.get().map(|why| view! { <Guessed why /> })}
                     }
                 })}
         </li>

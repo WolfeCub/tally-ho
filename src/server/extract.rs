@@ -1,7 +1,7 @@
 //! Receipt line-item extraction against local models via Ollama.
 //!
 //! Two stages, because reading a creased receipt and structuring it are different
-//! skills: a small OCR model transcribes the photo, then the vision model turns
+//! skills: a small OCR model transcribes the photo, then `OLLAMA_MODEL` turns
 //! that text into [`ExtractedReceipt`] without ever seeing the image. Setting
 //! `OLLAMA_OCR_MODEL` empty collapses it back to one model reading the photo.
 //!
@@ -17,7 +17,7 @@
 //! Instead we drive an `Agent` in [`OutputMode::Native`], which rig maps to
 //! Ollama's `format` field. That is a grammar constraint: the response is
 //! *guaranteed* to match the schema, and no tool-calling support is required of
-//! the vision model.
+//! the model.
 
 use std::time::{Duration, Instant};
 
@@ -27,13 +27,13 @@ use rig_agent::agent::{Agent, OutputMode};
 // CompletionClient; the prelude brings in both.
 use rig_agent::prelude::*;
 use rig_core::OneOrMany;
-use rig_core::client::Nothing;
 use rig_core::message::{ImageMediaType, Message, UserContent};
 use rig_core::providers::ollama;
 use rust_decimal::Decimal;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::ask;
 use super::image::{self, ImageError};
 
 const DEFAULT_URL: &str = "http://localhost:11434";
@@ -127,7 +127,7 @@ pub struct ExtractedReceipt {
     /// balances, so nothing looks wrong. [`parse_date`] applies one documented,
     /// unit-tested convention instead.
     pub purchased_on: Option<String>,
-    /// ISO currency code if printed or unambiguous, e.g. USD.
+    /// ISO currency code, e.g. USD.
     pub currency: Option<String>,
     pub subtotal: Option<String>,
     pub tax: Option<String>,
@@ -161,7 +161,11 @@ Fields:
 - merchant: the store name, e.g. Walmart.
 - purchased_on: the transaction date copied EXACTLY as printed, character for \
 character, e.g. 08/12/21. Do not convert, reorder or reformat it.
-- currency: the ISO code, e.g. USD. Infer it from the currency symbol.
+- currency: the ISO code, e.g. USD. The one field to work out rather than copy, \
+so the rule above about guessing does not apply to it: the address, the phone \
+number and the name of the tax charged say which country the receipt was printed \
+in, and the country says which currency. A dollar sign on its own settles \
+nothing, since plenty of countries write their money with one.
 - subtotal: the amount printed as SUBTOTAL.
 - tax: the total tax amount printed.
 - total: the final amount charged, printed as TOTAL.
@@ -191,15 +195,8 @@ const OCR_PROMPT: &str = "Transcribe this receipt exactly as printed, line by li
 pub enum ExtractError {
     #[error("image preparation failed: {0}")]
     Image(#[from] ImageError),
-    #[error("ollama request failed: {0}")]
-    Prompt(String),
-    #[error("ollama did not respond within {0:?}")]
-    Timeout(Duration),
-    #[error(
-        "model returned no content — if the model is thinking-capable, reasoning tokens may have \
-         consumed the whole generation budget"
-    )]
-    EmptyResponse,
+    #[error(transparent)]
+    Ask(#[from] ask::Error),
     #[error("model returned data that did not match the schema: {0}")]
     Deserialize(#[from] serde_json::Error),
 }
@@ -227,8 +224,8 @@ pub struct Config {
     pub url: String,
     pub model: String,
     /// Transcribes the photo before [`Self::model`] structures it. Set
-    /// `OLLAMA_OCR_MODEL` empty to skip that and hand the photo straight to the
-    /// vision model, which is worse but needs only the one model pulled.
+    /// `OLLAMA_OCR_MODEL` empty to skip that and hand the photo to [`Self::model`]
+    /// instead, which then has to be able to see: worse, but one model to pull.
     pub ocr_model: Option<String>,
     /// Context window for [`Self::ocr_model`], big enough for the photo and the
     /// transcript it comes back as.
@@ -245,7 +242,7 @@ impl Config {
 
         Self {
             url: env::string("OLLAMA_URL", DEFAULT_URL),
-            model: env::string("OLLAMA_VISION_MODEL", DEFAULT_MODEL),
+            model: env::string("OLLAMA_MODEL", DEFAULT_MODEL),
             ocr_model: env::optional("OLLAMA_OCR_MODEL", DEFAULT_OCR_MODEL),
             ocr_context: env::number("OLLAMA_OCR_CONTEXT", DEFAULT_OCR_CONTEXT),
             keep_alive: env::optional("OLLAMA_KEEP_ALIVE", DEFAULT_KEEP_ALIVE),
@@ -274,23 +271,9 @@ pub struct OllamaExtractor {
 
 impl OllamaExtractor {
     pub fn new(config: Config) -> Result<Self, ExtractError> {
-        let client = ollama::Client::builder()
-            // Ollama needs no auth; `OllamaApiKey` has a `From<Nothing>` impl
-            // for exactly this. `build()` won't accept the unset state.
-            .api_key(Nothing)
-            .base_url(&config.url)
-            .build()
-            .map_err(|e| ExtractError::Prompt(e.to_string()))?;
-
-        // Both models get the same residency policy, and it has to ride along on
-        // every request: `keep_alive` restarts the clock per call rather than
-        // being a property of the loaded model, so sending it once wouldn't hold.
-        let with_keep_alive = |mut params: serde_json::Value| {
-            if let Some(keep_alive) = &config.keep_alive {
-                params["keep_alive"] = serde_json::Value::String(keep_alive.clone());
-            }
-            params
-        };
+        let client = ask::client(&config.url)?;
+        // Both models get the same residency policy.
+        let with_keep_alive = |params| ask::options(config.keep_alive.as_deref(), params);
 
         let agent = client
             .agent(&config.model)
@@ -314,10 +297,10 @@ impl OllamaExtractor {
             .additional_params(with_keep_alive(serde_json::json!({ "think": false })))
             // Maps to Ollama's `num_predict`.
             .max_tokens(MAX_OUTPUT_TOKENS)
-            .output_schema::<ExtractedReceipt>()
+            .output_schema_raw(ask::schema_of::<ExtractedReceipt>())
             // Native, not Tool: this becomes Ollama's `format`, a hard grammar
-            // constraint. Tool mode would depend on the vision model choosing
-            // to call a tool, which cannot be forced here.
+            // constraint. Tool mode would depend on the model choosing to call a
+            // tool, which cannot be forced here.
             .output_mode(OutputMode::Native)
             .build();
 
@@ -337,41 +320,6 @@ impl OllamaExtractor {
         });
 
         Ok(Self { agent, ocr, config })
-    }
-
-    /// One turn, bounded, with the two failure modes kept apart. `context` is the
-    /// ceiling we set on this agent, where we set one.
-    async fn ask(
-        agent: &Agent<ollama::CompletionModel>,
-        message: Message,
-        context: Option<u32>,
-    ) -> Result<String, ExtractError> {
-        let response =
-            tokio::time::timeout(REQUEST_TIMEOUT, agent.runner(message).max_turns(1).run())
-                .await
-                .map_err(|_| ExtractError::Timeout(REQUEST_TIMEOUT))?
-                .map_err(|e| ExtractError::Prompt(e.to_string()))?;
-
-        // A filled context cuts the transcript off mid-receipt and reports no error;
-        // the tell is the token count landing on the limit. Zero means Ollama sent
-        // no count at all.
-        let used = response.usage.total_tokens;
-        if used > 0 && context.is_some_and(|limit| used >= u64::from(limit)) {
-            tracing::error!(
-                tokens = used,
-                "the OCR context filled, so the transcript stops mid-receipt — raise \
-                 OLLAMA_OCR_CONTEXT"
-            );
-        }
-
-        let output = response.output;
-
-        // Distinguish "no content" from "bad JSON" — very different causes, and an
-        // empty body otherwise surfaces as "expected value at line 1 column 1".
-        if output.trim().is_empty() {
-            return Err(ExtractError::EmptyResponse);
-        }
-        Ok(output)
     }
 }
 
@@ -397,8 +345,13 @@ impl ReceiptExtractor for OllamaExtractor {
             // models: this one transcribes, and the schema-bound one below never
             // sees the photo.
             Some(ocr) => {
-                let transcript =
-                    Self::ask(ocr, photo(OCR_PROMPT), Some(self.config.ocr_context)).await?;
+                let transcript = ask::once(
+                    ocr,
+                    photo(OCR_PROMPT),
+                    REQUEST_TIMEOUT,
+                    Some(self.config.ocr_context),
+                )
+                .await?;
                 Message::user(format!("The receipt, transcribed:\n\n{transcript}"))
             }
             None => photo("Extract every line item from this receipt."),
@@ -406,7 +359,7 @@ impl ReceiptExtractor for OllamaExtractor {
 
         // No ceiling passed: this agent runs on whatever context Ollama is
         // configured with, so there's nothing to compare against.
-        let raw = Self::ask(&self.agent, message, None).await?;
+        let raw = ask::once(&self.agent, message, REQUEST_TIMEOUT, None).await?;
         let elapsed = started.elapsed();
         let receipt: ExtractedReceipt = serde_json::from_str(&raw)?;
 
@@ -558,6 +511,10 @@ pub fn parse_date(raw: &str) -> Option<jiff::civil::Date> {
         return Some(d);
     }
 
+    if let Some(d) = spelled_month(s) {
+        return Some(d);
+    }
+
     let parts: Vec<&str> = s
         .split(['/', '-', '.'])
         .map(str::trim)
@@ -579,6 +536,32 @@ pub fn parse_date(raw: &str) -> Option<jiff::civil::Date> {
     // not historical documents.
     let year = if parts[2].len() <= 2 { 2000 + c } else { c };
     jiff::civil::Date::new(year as i16, a as i8, b).ok()
+}
+
+/// A month spelled out: "28 Jul 2026", "July 28, 2026", "28-JUL-26". Amex writes
+/// its statements this way, and there's nothing to disambiguate once the month
+/// names itself.
+fn spelled_month(s: &str) -> Option<jiff::civil::Date> {
+    // Down to single spaces first, so four formats cover whatever punctuation
+    // the file separates the fields with.
+    let tidied = s
+        .split(|c: char| c.is_whitespace() || matches!(c, ',' | '-' | '/' | '.'))
+        .filter(|field| !field.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // Month names match whatever case they're written in. `%b` is the
+    // abbreviation and `%B` the full name; neither accepts the other.
+    let date = ["%d %b %Y", "%d %B %Y", "%b %d %Y", "%B %d %Y"]
+        .iter()
+        .find_map(|format| jiff::civil::Date::strptime(format, &tidied).ok())?;
+
+    // `%Y` takes a two-digit year at face value, so "28 Jul 26" comes back as
+    // year 26. Same rule as above: current century.
+    match date.year() {
+        ..100 => jiff::civil::Date::new(date.year() + 2000, date.month(), date.day()).ok(),
+        _ => Some(date),
+    }
 }
 
 #[cfg(test)]
@@ -632,6 +615,22 @@ mod tests {
         assert_eq!(parse_date("7/14/26"), Some(expected));
         assert_eq!(parse_date("2026/07/14"), Some(expected));
         assert_eq!(parse_date("07.14.2026"), Some(expected));
+    }
+
+    /// Amex writes the month out, and every row of a statement is the same
+    /// shape, so missing this makes the whole file unreadable rather than one
+    /// row.
+    #[test]
+    fn parses_dates_with_the_month_spelled_out() {
+        let expected = jiff::civil::date(2026, 7, 28);
+        assert_eq!(parse_date("28 Jul 2026"), Some(expected));
+        assert_eq!(parse_date("28 July 2026"), Some(expected));
+        assert_eq!(parse_date("28-JUL-2026"), Some(expected));
+        assert_eq!(parse_date("Jul 28, 2026"), Some(expected));
+        assert_eq!(parse_date("July 28, 2026"), Some(expected));
+        assert_eq!(parse_date("28 Jul 26"), Some(expected));
+        // Still a word where the month should be.
+        assert_eq!(parse_date("28 Jly 2026"), None);
     }
 
     /// Regression guard. The model returned `2021-12-08` for a receipt printed

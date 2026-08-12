@@ -3,7 +3,7 @@
 //! model is good enough, and to iterate on the prompt.
 //!
 //!   OLLAMA_URL=http://host.orb.internal:11434 \
-//!   OLLAMA_VISION_MODEL=gemma4:12b \
+//!   OLLAMA_MODEL=gemma4:12b \
 //!   cargo run --no-default-features --features ssr --bin extract_probe -- path/to/receipt.webp
 //!
 //! Add `RUST_LOG=rig=debug` to see the request rig actually sends (confirm it
@@ -13,7 +13,8 @@
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use rust_decimal::Decimal;
-    use tally_ho::server::extract::{Config, OllamaExtractor, ReceiptExtractor};
+    use tally_ho::server::ask;
+    use tally_ho::server::extract::{Config, ExtractedReceipt, OllamaExtractor, ReceiptExtractor};
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -32,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Ollama turns it into a GBNF grammar, and a schema it can't convert
     // cleanly yields structurally-valid-but-nonsense JSON.
     if paths[0] == "--schema" {
-        let schema = schemars::schema_for!(tally_ho::server::extract::ExtractedReceipt);
+        let schema = ask::schema_of::<ExtractedReceipt>();
         println!("{}", serde_json::to_string_pretty(&schema)?);
         return Ok(());
     }

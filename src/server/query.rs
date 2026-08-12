@@ -120,12 +120,19 @@ pub async fn save_receipt(
                 // re-extraction knows not to clobber it.
                 let edited =
                     row.edited || row.description != item.description || row.total != item.total;
+                // Picking somebody makes it your answer rather than the model's.
+                let guessed_why = if row.person_id == item.person_id {
+                    row.guessed_why.clone()
+                } else {
+                    None
+                };
                 toasty::update!(row {
                     description: item.description,
                     total: item.total,
                     position: position,
                     edited: edited,
                     person_id: item.person_id,
+                    guessed_why: guessed_why,
                 })
                 .exec(&mut tx)
                 .await?;
@@ -150,6 +157,48 @@ pub async fn save_receipt(
     }
 
     tx.commit().await
+}
+
+/// Writes what the model guessed about a receipt's items, and hands back how many
+/// it named. The two lists line up, so the items must be in the order they were
+/// guessed about.
+///
+/// A guess replaces the last guess and never an answer. That an item was
+/// deliberately left unassigned isn't recorded anywhere, so it can be guessed at
+/// again.
+pub async fn apply_guesses(
+    db: &mut toasty::Db,
+    items: Vec<models::LineItem>,
+    guesses: Vec<Option<crate::server::assign::Guess>>,
+) -> toasty::Result<usize> {
+    let mut named = 0;
+    let mut tx = db.transaction().await?;
+
+    for (mut item, guess) in items.into_iter().zip(guesses) {
+        if crate::server::assign::decided(&item) {
+            continue;
+        }
+        named += usize::from(guess.is_some());
+
+        let (person_id, why) = match guess {
+            Some(guess) => (Some(guess.person_id), Some(guess.why)),
+            None => (None, None),
+        };
+        // Saying the same thing again is not worth a write.
+        if item.person_id == person_id && item.guessed_why == why {
+            continue;
+        }
+
+        toasty::update!(item {
+            person_id: person_id,
+            guessed_why: why,
+        })
+        .exec(&mut tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(named)
 }
 
 /// Everyone a line item can be charged to, by name.
@@ -252,9 +301,12 @@ pub async fn save_people(db: &mut toasty::Db, people: Vec<PersonSave>) -> toasty
                 .exec(&mut tx)
                 .await?
         {
-            toasty::update!(item { person_id: None })
-                .exec(&mut tx)
-                .await?;
+            toasty::update!(item {
+                person_id: None,
+                guessed_why: None,
+            })
+            .exec(&mut tx)
+            .await?;
         }
         person.delete().exec(&mut tx).await?;
     }
@@ -518,6 +570,89 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(all.len(), 3, "the misread row is gone");
+    }
+
+    /// A guess is only a guess until somebody says otherwise, and saving is how
+    /// they say it, including saying "actually, nobody's".
+    #[tokio::test]
+    async fn picking_somebody_yourself_settles_a_guess() {
+        use crate::server::models::Person;
+
+        let mut db = crate::server::db::connect_url("sqlite::memory:")
+            .await
+            .unwrap();
+
+        let josh = toasty::create!(Person { name: "Josh" })
+            .exec(&mut db)
+            .await
+            .unwrap();
+        let ash = toasty::create!(Person { name: "Ash" })
+            .exec(&mut db)
+            .await
+            .unwrap();
+
+        let receipt = toasty::create!(Receipt {
+            purchased_on: jiff::civil::date(2026, 7, 20),
+            merchant: "Costco",
+            total: dec("30.00"),
+            currency: "USD",
+            image_path: "a.jpg",
+            line_items: [
+                { description: "Beer", total: dec("18.00"), position: 0, person_id: josh.id, guessed_why: "he drinks it" },
+                { description: "Steak", total: dec("8.00"), position: 1, person_id: josh.id, guessed_why: "Ash is vegetarian" },
+                { description: "Milk", total: dec("4.00"), position: 2, person_id: josh.id, guessed_why: "a guess" },
+            ],
+        })
+        .exec(&mut db)
+        .await
+        .unwrap();
+
+        let mut before = receipt.line_items().exec(&mut db).await.unwrap();
+        before.sort_by_key(|item| item.position);
+        let save = |item: &crate::server::models::LineItem, person_id| super::ItemSave {
+            id: Some(item.id),
+            description: item.description.clone(),
+            total: item.total,
+            person_id,
+        };
+
+        super::save_receipt(
+            &mut db,
+            receipt.id,
+            super::ReceiptSave {
+                merchant: "Costco".into(),
+                purchased_on: jiff::civil::date(2026, 7, 20),
+                currency: "USD".into(),
+                subtotal: None,
+                tax: None,
+                total: Some(dec("30.00")),
+                items: vec![
+                    // Left alone, so still the model's word.
+                    save(&before[0], Some(josh.id)),
+                    // Corrected.
+                    save(&before[1], Some(ash.id)),
+                    // Handed back to the even split, which is an answer too.
+                    save(&before[2], None),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut after = receipt.line_items().exec(&mut db).await.unwrap();
+        after.sort_by_key(|item| item.position);
+        let got: Vec<_> = after
+            .iter()
+            .map(|item| (item.person_id, item.guessed_why.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (Some(josh.id), Some("he drinks it")),
+                (Some(ash.id), None),
+                (None, None),
+            ]
+        );
     }
 
     /// One save has to rename, add and remove people at once — the settings

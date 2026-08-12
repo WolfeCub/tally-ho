@@ -1,6 +1,6 @@
 [package]
 name = "tally-ho"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2024"
 
 [lib]
@@ -24,8 +24,8 @@ uuid = { version = "1.24", features = ["serde"] }
 
 # Server-only, hence `optional` + the `ssr` feature below. Most of these will not
 # build for wasm32 at all.
-toasty = { version = "0.9", features = ["sqlite", "jiff", "rust_decimal", "serde", "migration"], optional = true }
-toasty-cli = { version = "0.9", optional = true }
+toasty = { version = "0.10", features = ["sqlite", "jiff", "rust_decimal", "serde", "migration"], optional = true }
+toasty-cli = { version = "0.10", optional = true }
 axum = { version = "0.8", optional = true }
 leptos_axum = { version = "0.8", optional = true }
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "fs"], optional = true }

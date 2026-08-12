@@ -156,10 +156,20 @@ pub struct Charge {
 /// Extraction runs in the background (a 7B vision model takes far too long to
 /// block an HTTP response on), so a receipt's progress has to be persisted for
 /// the client to poll.
+///
+/// Two model calls, so two working states: `Extracting` reads the photo and
+/// `Assigning` works out whose the items are. `Done` means both are finished, so
+/// a client that stops polling on it has everything.
+///
+/// Adding a variant here is not free: it's stored as a `CHECK` constraint, and
+/// SQLite can only widen one by rebuilding the table, which drops the indexes
+/// with it. That's why there's a migration to put the one on `purchased_on`
+/// back.
 #[derive(Debug, PartialEq, toasty::Embed)]
 pub enum ExtractionStatus {
     Pending,
     Extracting,
+    Assigning,
     Done,
     Failed,
 }
@@ -184,6 +194,11 @@ pub struct LineItem {
     /// reconciliation asks "what did this person buy in this period".
     #[index]
     pub person_id: Option<Uuid>,
+
+    /// Why the model put [`Self::person_id`] where it did, when it was the model
+    /// and not a human. Set means the assignment is a guess: it says so on
+    /// screen, the next guess may replace it, and a human's never is one.
+    pub guessed_why: Option<String>,
 
     /// Preserves the order printed on the receipt.
     pub position: i64,

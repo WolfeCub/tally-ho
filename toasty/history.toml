@@ -14,3 +14,13 @@ snapshot_name = "0001_snapshot.toml"
 id = 5131349434528572395
 name = "0002_add_statements.sql"
 snapshot_name = "0002_snapshot.toml"
+
+[[migrations]]
+id = 1804448011042176275
+name = "0003_add_assignment_guesses.sql"
+snapshot_name = "0003_snapshot.toml"
+
+[[migrations]]
+id = 4965747564171861539
+name = "0004_add_purchased_on_index.sql"
+snapshot_name = "0004_snapshot.toml"

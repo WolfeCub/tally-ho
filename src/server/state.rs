@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use super::assign::{self, ItemAssigner, OllamaAssigner};
 use super::extract::{Config, OllamaExtractor, ReceiptExtractor};
 use super::store::Store;
 
@@ -16,6 +17,9 @@ pub struct AppState {
     /// A trait object, so the rig/Ollama implementation can be swapped for a
     /// fake in tests or a hosted model later without touching call sites.
     pub extractor: Arc<dyn ReceiptExtractor>,
+    /// Guesses who owes what from everyone's description. Same reason for the
+    /// trait object as above.
+    pub assigner: Arc<dyn ItemAssigner>,
     pub store: Arc<Store>,
     /// The ISO code imported statements are in, and what a receipt is taken to
     /// be in when it doesn't print one. One card, one currency — so it's
@@ -26,6 +30,7 @@ pub struct AppState {
 impl AppState {
     pub async fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
         let config = Config::from_env();
+        let assigning = assign::Config::from_extraction(&config);
         let currency = currency_from_env()?;
         tracing::info!(
             model = %config.label(),
@@ -35,10 +40,12 @@ impl AppState {
             %currency,
             "extraction configured"
         );
+        tracing::info!(model = %assigning.model, "assignment configured");
 
         Ok(Self {
             db: crate::server::db::connect().await?,
             extractor: Arc::new(OllamaExtractor::new(config)?),
+            assigner: Arc::new(OllamaAssigner::new(assigning)?),
             store: Arc::new(Store::from_env()),
             currency,
         })

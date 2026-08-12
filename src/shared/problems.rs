@@ -93,6 +93,7 @@ mod tests {
             position: 0,
             edited: false,
             person_id: None,
+            guessed_why: None,
         }
     }
 

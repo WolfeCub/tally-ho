@@ -176,7 +176,7 @@
           DATA_DIR = "./data";
           # Ollama runs on the OrbStack host, not in here.
           OLLAMA_URL = "http://host.orb.internal:11434";
-          OLLAMA_VISION_MODEL = "gemma4:12b";
+          OLLAMA_MODEL = "gemma4:12b";
           OLLAMA_OCR_MODEL = "glm-ocr:q8_0";
           RUST_LOG = "info,tally_ho=debug";
         };

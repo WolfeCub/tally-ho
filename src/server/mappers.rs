@@ -10,6 +10,7 @@ pub fn to_dto_status(status: &models::ExtractionStatus) -> dto::ExtractionStatus
     match status {
         models::ExtractionStatus::Pending => dto::ExtractionStatus::Pending,
         models::ExtractionStatus::Extracting => dto::ExtractionStatus::Extracting,
+        models::ExtractionStatus::Assigning => dto::ExtractionStatus::Assigning,
         models::ExtractionStatus::Done => dto::ExtractionStatus::Done,
         models::ExtractionStatus::Failed => dto::ExtractionStatus::Failed,
     }
@@ -25,6 +26,7 @@ pub fn to_dto_line_item(item: &models::LineItem) -> dto::LineItem {
         position: item.position,
         edited: item.edited,
         person_id: item.person_id,
+        guessed_why: item.guessed_why.clone(),
     }
 }
 

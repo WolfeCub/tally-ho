@@ -20,6 +20,7 @@ use crate::frontend::route::id_param;
 use crate::frontend::text::total_or_why;
 use crate::shared::api::{
     delete_receipt, get_receipt, list_people, mark_reviewed, retry_extraction, save_receipt,
+    suggest_assignments,
 };
 use crate::shared::dto::{ExtractionStatus, LineItemSave, Person, Receipt, ReceiptSave};
 use items::{LineItems, Row};
@@ -89,7 +90,7 @@ pub fn ReviewPage() -> impl IntoView {
                     Err(e) => failed(e),
                     Ok(None) => failed("Not a valid receipt id."),
                     Ok(Some((r, people))) => {
-                        view! { <ReviewForm receipt=r people reload /> }.into_any()
+                        view! { <ReviewForm receipt=r people status reload /> }.into_any()
                     }
                 }
             })}
@@ -104,6 +105,9 @@ pub fn ReviewPage() -> impl IntoView {
 fn ReviewForm(
     receipt: Receipt,
     people: Vec<Person>,
+    /// Where extraction has got to right now, which the loaded receipt can't say:
+    /// it's only reloaded once the work stops.
+    status: Resource<Option<ExtractionStatus>>,
     reload: impl Fn() + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
     let id = receipt.id;
@@ -113,15 +117,23 @@ fn ReviewForm(
     let reviewed = receipt.reviewed;
     let has_total = receipt.total.is_some();
     let rows = RwSignal::new(Row::from_items(&receipt.line_items));
+    // Nothing to guess from until somebody has been described in Settings.
+    let described = people.iter().any(Person::described);
 
     let save = Action::new(|save: &ReceiptSave| save_receipt(save.clone()));
     let review = Action::new(|id: &Uuid| mark_reviewed(*id));
     let discard = Action::new(|id: &Uuid| delete_receipt(*id));
     let retry = Action::new(|id: &Uuid| retry_extraction(*id));
+    let guess = Action::new(|id: &Uuid| suggest_assignments(*id));
 
-    // All three end the same way: with whatever the server now has.
+    // The whole form is off while the server is working on the receipt: each of
+    // these ends by reloading it, so anything typed in the meantime would be
+    // thrown away without saying so.
+    let busy = move || extracting || guess.pending().get() || save.pending().get();
+
+    // They all end the same way: with whatever the server now has.
     Effect::new(move |_| {
-        if succeeded(save) || succeeded(review) || succeeded(retry) {
+        if succeeded(save) || succeeded(review) || succeeded(retry) || succeeded(guess) {
             reload();
         }
     });
@@ -141,6 +153,7 @@ fn ReviewForm(
             error_of(review),
             error_of(discard),
             error_of(retry),
+            error_of(guess),
         ])
     };
 
@@ -179,60 +192,92 @@ fn ReviewForm(
 
             // min-w-0 so long merchant names can't push the column wider than half.
             <div class="min-w-0">
-                <ExtractionNotice receipt=receipt.clone() retry />
+                <ExtractionNotice receipt=receipt.clone() status retry />
 
                 {move || error_text().map(|e| view! { <Notice tone=Tone::Bad>{e}</Notice> })}
 
-                <ReceiptFields receipt=receipt.clone() submit />
+                // One switch for every field and button below it: a disabled
+                // fieldset disables what it contains. `contents` so it lays out
+                // as if it weren't there.
+                <fieldset class="contents" disabled=busy>
+                    <ReceiptFields receipt=receipt.clone() submit />
 
-                <LineItems
-                    rows
-                    people
-                    subtotal=receipt.subtotal
-                    currency=receipt.currency.clone()
-                />
+                    <LineItems
+                        rows
+                        people
+                        subtotal=receipt.subtotal
+                        currency=receipt.currency.clone()
+                    />
 
-                <div class="flex flex-col gap-2 border-t border-edge pt-6">
-                    <button
-                        type="submit"
-                        form=FORM_ID
-                        disabled=move || save.pending().get() || extracting
-                        class=format!("{PRIMARY} w-full")
-                    >
-                        {move || if save.pending().get() { "Saving…" } else { "Save receipt" }}
-                    </button>
+                    <div class="flex flex-col gap-2 border-t border-edge pt-6">
+                        <button type="submit" form=FORM_ID class=format!("{PRIMARY} w-full")>
+                            {move || if save.pending().get() { "Saving…" } else { "Save receipt" }}
+                        </button>
 
-                    <button
-                        type="button"
-                        class=format!("{BUTTON} w-full")
-                        disabled=!has_total || extracting
-                        on:click=move |_| {
-                            review.dispatch(id);
-                        }
-                    >
-                        {if reviewed { "Checked — mark again" } else { "Mark as checked" }}
-                    </button>
-                    {(!has_total)
-                        .then(|| {
-                            view! {
-                                <p class="text-sm text-muted">
-                                    "Enter a total and save it before marking this checked."
-                                </p>
+                        {described
+                            .then(|| {
+                                view! {
+                                    // Set apart from Save: this one costs a trip to the
+                                    // model and comes back with something to check.
+                                    <button
+                                        type="button"
+                                        class=format!("{BUTTON} mt-4 w-full")
+                                        title="Goes by everyone's description in Settings and \
+                                        leaves items you assigned yourself alone. Save first: this \
+                                        reloads the receipt, so anything unsaved goes."
+                                        on:click=move |_| {
+                                            guess.dispatch(id);
+                                        }
+                                    >
+                                        {move || {
+                                            if guess.pending().get() {
+                                                "Assigning…"
+                                            } else {
+                                                "Auto-assign items"
+                                            }
+                                        }}
+                                    </button>
+                                }
+                            })}
+
+                        <button
+                            type="button"
+                            class=format!("{BUTTON} w-full")
+                            disabled=!has_total
+                            on:click=move |_| {
+                                review.dispatch(id);
                             }
-                        })}
+                        >
+                            {if reviewed { "Checked — mark again" } else { "Mark as checked" }}
+                        </button>
+                        {(!has_total)
+                            .then(|| {
+                                view! {
+                                    <p class="text-sm text-muted">
+                                        "Enter a total and save it before marking this checked."
+                                    </p>
+                                }
+                            })}
 
-                    <button
-                        type="button"
-                        class=format!("{DANGER} mt-8 w-full")
-                        on:click=move |_| {
-                            if confirm("Delete this receipt and its photo? This cannot be undone.") {
-                                discard.dispatch(id);
-                            }
-                        }
-                    >
-                        "Delete receipt"
-                    </button>
-                </div>
+                        // Off on its own and no wider than its label: it's the one
+                        // button here you can't take back.
+                        <div class="mt-8 flex justify-end">
+                            <button
+                                type="button"
+                                class=DANGER
+                                on:click=move |_| {
+                                    if confirm(
+                                        "Delete this receipt and its photo? This cannot be undone.",
+                                    ) {
+                                        discard.dispatch(id);
+                                    }
+                                }
+                            >
+                                "Delete receipt"
+                            </button>
+                        </div>
+                    </div>
+                </fieldset>
             </div>
         </div>
     }
@@ -243,6 +288,7 @@ fn ReviewForm(
 #[component]
 fn ExtractionNotice(
     receipt: Receipt,
+    status: Resource<Option<ExtractionStatus>>,
     retry: Action<Uuid, Result<(), ServerFnError>>,
 ) -> impl IntoView {
     let id = receipt.id;
@@ -250,17 +296,26 @@ fn ExtractionNotice(
     // Doubles as the reason it failed and, on success, the extractor's per-field
     // parse notes.
     let notes = receipt.extraction_error.clone();
+    let loaded = receipt.status;
 
     match receipt.status {
-        ExtractionStatus::Pending | ExtractionStatus::Extracting => view! {
-            <Notice tone=Tone::Quiet>
-                <div class="flex items-center gap-2">
-                    <Spinner />
-                    "Reading the receipt…"
-                </div>
-            </Notice>
+        ExtractionStatus::Pending | ExtractionStatus::Extracting | ExtractionStatus::Assigning => {
+            // Off the poll rather than the receipt, so this keeps up with the
+            // stages instead of naming the one it was at when the page opened.
+            let doing = move || match status.get().flatten().unwrap_or(loaded) {
+                ExtractionStatus::Assigning => "Working out who owes what…",
+                _ => "Reading the receipt…",
+            };
+            view! {
+                <Notice tone=Tone::Quiet>
+                    <div class="flex items-center gap-2">
+                        <Spinner />
+                        {doing}
+                    </div>
+                </Notice>
+            }
+            .into_any()
         }
-        .into_any(),
 
         ExtractionStatus::Failed => view! {
             <Notice tone=Tone::Bad>
