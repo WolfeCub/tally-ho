@@ -13,6 +13,7 @@ mod receipts;
 mod reconcile;
 mod review;
 mod route;
+mod rows;
 mod settings;
 mod text;
 

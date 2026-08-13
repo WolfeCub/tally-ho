@@ -1,12 +1,5 @@
-//! Fixtures for the tests that touch the database. The wire-type ones are in
+//! The database fixture. The wire types have their own, in
 //! [`crate::shared::testing`].
-
-use rust_decimal::Decimal;
-use std::str::FromStr;
-
-pub fn dec(s: &str) -> Decimal {
-    Decimal::from_str(s).unwrap()
-}
 
 /// A database of its own per test, schema and all. In-memory, so nothing is
 /// shared between tests and nothing is left behind.

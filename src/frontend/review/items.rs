@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::frontend::components::INPUT;
 use crate::frontend::money::money;
+use crate::frontend::rows::{Keyed, Rows};
 use crate::frontend::text::plural;
 use crate::shared::dto::{LineItem, Person};
 
@@ -19,10 +20,8 @@ use crate::shared::dto::{LineItem, Person};
 const IN_ROW: &str = "shrink-0 rounded-lg border border-edge px-3 active:bg-edge \
                       disabled:opacity-40";
 
-/// A line item as the screen has it.
-///
-/// `key` is stable for the life of the row so [`For`] never rebuilds an input
-/// you're typing in. `id` is `None` until a row you added has been saved.
+/// A line item as the screen has it. `id` is `None` until a row you added has
+/// been saved.
 #[derive(Clone)]
 pub struct Row {
     key: usize,
@@ -35,6 +34,12 @@ pub struct Row {
     /// Why the model thinks it's theirs. Shown but never sent: the server keeps
     /// its own note, and picking somebody yourself clears it.
     pub guessed_why: Option<String>,
+}
+
+impl Keyed for Row {
+    fn key(&self) -> usize {
+        self.key
+    }
 }
 
 impl Row {
@@ -78,21 +83,15 @@ pub fn LineItems(
     let people = StoredValue::new(people);
     let currency = StoredValue::new(currency);
 
-    // Keys only have to be unique within this form, so a counter does.
-    let next_key = RwSignal::new(rows.get_untracked().len());
     let add_row = move || {
-        let key = next_key.get_untracked();
-        next_key.set(key + 1);
-        rows.update(|rows| {
-            rows.push(Row {
-                key,
-                id: None,
-                description: String::new(),
-                total: String::new(),
-                person_id: None,
-                guessed_why: None,
-            })
-        });
+        rows.add(|key| Row {
+            key,
+            id: None,
+            description: String::new(),
+            total: String::new(),
+            person_id: None,
+            guessed_why: None,
+        })
     };
 
     // Blank while an amount is half-typed and doesn't parse yet.
@@ -201,11 +200,7 @@ fn ItemRow(row: Row, rows: RwSignal<Vec<Row>>, people: StoredValue<Vec<Person>>)
     let has_people = people.with_value(|people| !people.is_empty());
 
     let edit = move |f: fn(&mut Row, String), value: String| {
-        rows.update(|rows| {
-            if let Some(row) = rows.iter_mut().find(|row| row.key == key) {
-                f(row, value);
-            }
-        });
+        rows.edit(key, move |row| f(row, value));
     };
 
     // This row's own, so typing in another one doesn't disturb it. Cleared when
@@ -239,7 +234,7 @@ fn ItemRow(row: Row, rows: RwSignal<Vec<Row>>, people: StoredValue<Vec<Person>>)
                 type="button"
                 class=format!("{IN_ROW} text-muted")
                 aria-label="Remove this item"
-                on:click=move |_| rows.update(|rows| rows.retain(|row| row.key != key))
+                on:click=move |_| rows.remove(key)
             >
                 "✕"
             </button>

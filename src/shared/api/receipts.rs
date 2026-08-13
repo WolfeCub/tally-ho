@@ -7,8 +7,16 @@ use uuid::Uuid;
 
 use crate::shared::dto;
 
+// Server-only, so these are behind a `cfg` rather than plain imports.
 #[cfg(feature = "ssr")]
-use anyhow::Context as _;
+use {
+    super::support::{db, one_file},
+    crate::server::job,
+    crate::server::parse,
+    crate::server::queries::receipts,
+    crate::server::state::AppState,
+    anyhow::Context as _,
+};
 
 /// Stores an uploaded photo, creates the receipt row, and kicks off extraction.
 ///
@@ -16,12 +24,9 @@ use anyhow::Context as _;
 /// caller should poll [`receipt_status`].
 #[server(input = MultipartFormData)]
 pub async fn upload_receipt(data: MultipartData) -> Result<Uuid, ServerFnError> {
-    use crate::server::models::Receipt;
-    use crate::server::{job, state::AppState};
-
     let state = expect_context::<AppState>();
 
-    let (_, bytes) = super::support::one_file(data, "receipt").await;
+    let (_, bytes) = one_file(data, "receipt").await;
     if bytes.is_empty() {
         return Err(ServerFnError::new("no image was uploaded"));
     }
@@ -35,73 +40,36 @@ pub async fn upload_receipt(data: MultipartData) -> Result<Uuid, ServerFnError> 
         .map_err(ServerFnError::new)?;
 
     let mut db = state.db.clone();
-    // Deliberately minimal: everything else is unknown until extraction runs.
-    // `purchased_on` is provisionally today and `total` stays null — null means
-    // "not yet known", never zero.
-    let receipt = toasty::create!(Receipt {
-        purchased_on: today,
-        merchant: "",
-        currency: "USD",
-        image_path: image_path.clone(),
-    })
-    .exec(&mut db)
-    .await
-    .context("could not create receipt")
-    .map_err(ServerFnError::new)?;
+    let id = receipts::create(&mut db, &image_path, today)
+        .await
+        .context("could not create receipt")
+        .map_err(ServerFnError::new)?;
 
-    job::spawn(state.clone(), receipt.id);
+    job::spawn(state.clone(), id);
 
-    Ok(receipt.id)
+    Ok(id)
 }
 
 /// Poll target while extraction runs.
 #[server]
 pub async fn receipt_status(id: Uuid) -> Result<dto::ExtractionStatus, ServerFnError> {
-    use crate::server::models::Receipt;
-
-    let mut db = super::support::db();
-
-    let receipt = Receipt::get_by_id(&mut db, &id)
+    receipts::status(&mut db(), id)
         .await
         .context("no such receipt")
-        .map_err(ServerFnError::new)?;
-
-    Ok(crate::server::mappers::to_dto_status(&receipt.status))
+        .map_err(ServerFnError::new)
 }
 
 /// Re-runs extraction on a receipt the model failed to read.
-///
-/// Only from `Failed`: one still extracting already has a job running, and a
-/// finished one has line items a second run would duplicate.
 #[server]
 pub async fn retry_extraction(id: Uuid) -> Result<(), ServerFnError> {
-    use crate::server::models::{ExtractionStatus, Receipt};
-    use crate::server::{job, state::AppState};
-
     let state = expect_context::<AppState>();
     let mut db = state.db.clone();
 
-    let mut receipt = Receipt::get_by_id(&mut db, &id)
-        .await
-        .context("no such receipt")
-        .map_err(ServerFnError::new)?;
-
-    if receipt.status != ExtractionStatus::Failed {
-        return Err(ServerFnError::new(
-            "this receipt didn't fail — nothing to retry",
-        ));
-    }
-
-    // Cleared before spawning, so the caller's reload sees a receipt that's
+    // Reset before spawning, so the caller's reload sees a receipt that's
     // working again rather than the failure it just retried.
-    toasty::update!(receipt {
-        status: ExtractionStatus::Pending,
-        extraction_error: None,
-    })
-    .exec(&mut db)
-    .await
-    .context("could not reset receipt")
-    .map_err(ServerFnError::new)?;
+    receipts::reset_for_retry(&mut db, id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     job::spawn(state, id);
     Ok(())
@@ -110,30 +78,23 @@ pub async fn retry_extraction(id: Uuid) -> Result<(), ServerFnError> {
 /// Reverse-chronological receipts, newest first, for the list tab.
 #[server]
 pub async fn recent_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, ServerFnError> {
-    use crate::server::queries::receipts;
-
-    Ok(receipts::recent(&mut super::support::db(), limit)
+    receipts::recent(&mut db(), limit)
         .await
         .context("could not load receipts")
-        .map_err(ServerFnError::new)?
-        .iter()
-        .map(|(receipt, items)| crate::server::mappers::to_dto_summary(receipt, items))
-        .collect())
+        .map_err(ServerFnError::new)
 }
 
 /// Full receipt with line items, for the review screen.
 #[server]
 pub async fn get_receipt(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
-    load_receipt(&mut super::support::db(), id).await
+    load_receipt(&mut db(), id).await
 }
 
 /// Applies the review screen's corrections — the receipt's own fields and the
 /// line items as the human left them.
 #[server]
 pub async fn save_receipt(save: dto::ReceiptSave) -> Result<dto::Receipt, ServerFnError> {
-    use crate::server::queries::receipts;
-
-    let mut db = super::support::db();
+    let mut db = db();
 
     let id = save.id;
     let parsed = parse_save(save)?;
@@ -146,15 +107,22 @@ pub async fn save_receipt(save: dto::ReceiptSave) -> Result<dto::Receipt, Server
     load_receipt(&mut db, id).await
 }
 
+/// Parses a human-typed amount, distinguishing "cleared" from "unparseable".
+#[cfg(feature = "ssr")]
+fn optional_money(field: &str, raw: &str) -> Result<Option<rust_decimal::Decimal>, ServerFnError> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    parse::money(raw)
+        .map(Some)
+        .ok_or_else(|| ServerFnError::new(format!("could not read {field} {raw:?} as an amount")))
+}
+
 /// Checks everything the human typed before a single row is written.
 #[cfg(feature = "ssr")]
-fn parse_save(
-    save: dto::ReceiptSave,
-) -> Result<crate::server::queries::receipts::Save, ServerFnError> {
-    use super::support::optional_money;
-    use crate::server::queries::receipts::{Save, SaveItem};
-
-    let purchased_on = crate::server::parse::date(&save.purchased_on).ok_or_else(|| {
+fn parse_save(save: dto::ReceiptSave) -> Result<receipts::Save, ServerFnError> {
+    let purchased_on = parse::date(&save.purchased_on).ok_or_else(|| {
         ServerFnError::new(format!(
             "could not read {:?} as a date — try YYYY-MM-DD or MM/DD/YY",
             save.purchased_on
@@ -171,7 +139,7 @@ fn parse_save(
         if description.is_empty() {
             return Err(ServerFnError::new("a line item needs a description"));
         }
-        items.push(SaveItem {
+        items.push(receipts::SaveItem {
             id: item.id,
             description,
             total: optional_money("the amount", &item.total)?.unwrap_or_default(),
@@ -179,7 +147,7 @@ fn parse_save(
         });
     }
 
-    Ok(Save {
+    Ok(receipts::Save {
         merchant: save.merchant.trim().to_string(),
         purchased_on,
         currency: save.currency.trim().to_uppercase(),
@@ -197,8 +165,6 @@ fn parse_save(
 /// read, and because correcting a line item is a reason to ask again.
 #[server]
 pub async fn suggest_assignments(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
-    use crate::server::state::AppState;
-
     let state = expect_context::<AppState>();
     let mut db = state.db.clone();
 
@@ -211,33 +177,13 @@ pub async fn suggest_assignments(id: Uuid) -> Result<dto::Receipt, ServerFnError
 }
 
 /// Records that a human has checked this receipt against the photo.
-///
-/// Refuses while the receipt has no total: reconciliation matches on the total, so
-/// a reviewed receipt without one is a claim that nothing can act on.
 #[server]
 pub async fn mark_reviewed(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
-    use crate::server::models::Receipt;
+    let mut db = db();
 
-    let mut db = super::support::db();
-
-    let mut receipt = Receipt::get_by_id(&mut db, &id)
+    receipts::mark_reviewed(&mut db, id)
         .await
-        .context("no such receipt")
-        .map_err(ServerFnError::new)?;
-
-    if receipt.total.is_none() {
-        return Err(ServerFnError::new(
-            "this receipt has no total yet — enter one before marking it reviewed",
-        ));
-    }
-
-    toasty::update!(receipt {
-        reviewed_at: Some(jiff::Timestamp::now()),
-    })
-    .exec(&mut db)
-    .await
-    .context("could not mark reviewed")
-    .map_err(ServerFnError::new)?;
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     load_receipt(&mut db, id).await
 }
@@ -249,8 +195,6 @@ pub async fn mark_reviewed(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
 #[server]
 pub async fn delete_receipt(id: Uuid) -> Result<(), ServerFnError> {
     use crate::server::queries::receipts;
-    use crate::server::state::AppState;
-
     // The whole state, not just the db: the photo has to go too.
     let state = expect_context::<AppState>();
     let mut db = state.db.clone();
@@ -277,17 +221,9 @@ pub async fn delete_receipt(id: Uuid) -> Result<(), ServerFnError> {
 /// asked for on its own.
 #[cfg(feature = "ssr")]
 async fn load_receipt(db: &mut toasty::Db, id: Uuid) -> Result<dto::Receipt, ServerFnError> {
-    use crate::server::models::Receipt;
-
-    let receipt = Receipt::get_by_id(db, &id)
+    receipts::load(db, id)
         .await
-        .context("no such receipt")
-        .map_err(ServerFnError::new)?;
-    let items = receipt
-        .line_items()
-        .exec(db)
-        .await
-        .context("could not load line items")
-        .map_err(ServerFnError::new)?;
-    Ok(crate::server::mappers::to_dto_receipt(&receipt, &items))
+        .context("could not load receipt")
+        .map_err(ServerFnError::new)?
+        .ok_or_else(|| ServerFnError::new("no such receipt"))
 }

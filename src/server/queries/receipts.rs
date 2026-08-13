@@ -1,5 +1,7 @@
 //! Receipts, always with the line items that belong to them.
 
+use anyhow::Context as _;
+
 use crate::server::{mappers, models};
 use crate::shared::dto;
 
@@ -10,7 +12,7 @@ use crate::shared::dto;
 /// screen would then run a hundred of, every time it polls while something is
 /// being read. Reading the line-item table whole is a few thousand rows against
 /// a local SQLite file, and it doesn't grow with the size of the batch.
-pub async fn with_items(
+async fn with_items(
     db: &mut toasty::Db,
     receipts: Vec<models::Receipt>,
 ) -> toasty::Result<Vec<(models::Receipt, Vec<models::LineItem>)>> {
@@ -33,18 +35,34 @@ pub async fn with_items(
         .collect())
 }
 
-/// The newest receipts, each with its line items. For the list tab.
-pub async fn recent(
-    db: &mut toasty::Db,
-    limit: usize,
-) -> toasty::Result<Vec<(models::Receipt, Vec<models::LineItem>)>> {
+/// One receipt with its line items, as the client sees it.
+///
+/// `None` rather than an error when it isn't there: deleting a receipt clears the
+/// charges pointing at it, but a page loaded a moment earlier can still ask for
+/// one.
+pub async fn load(db: &mut toasty::Db, id: uuid::Uuid) -> toasty::Result<Option<dto::Receipt>> {
+    let Ok(receipt) = models::Receipt::get_by_id(db, &id).await else {
+        return Ok(None);
+    };
+    let items = receipt.line_items().exec(db).await?;
+    Ok(Some(mappers::to_dto_receipt(&receipt, &items)))
+}
+
+/// How far a receipt has got, for the client's poll.
+pub async fn status(db: &mut toasty::Db, id: uuid::Uuid) -> toasty::Result<dto::ExtractionStatus> {
+    let receipt = models::Receipt::get_by_id(db, &id).await?;
+    Ok(mappers::to_dto_status(&receipt.status))
+}
+
+/// The newest receipts first, for the list tab.
+pub async fn recent(db: &mut toasty::Db, limit: usize) -> toasty::Result<Vec<dto::ReceiptSummary>> {
     let receipts = models::Receipt::all()
         .order_by(models::Receipt::fields().purchased_on().desc())
         .limit(limit)
         .exec(db)
         .await?;
 
-    with_items(db, receipts).await
+    summaries(db, receipts).await
 }
 
 /// Receipts purchased in an inclusive date range, each with its line items.
@@ -83,11 +101,85 @@ pub async fn spare(db: &mut toasty::Db, limit: usize) -> toasty::Result<Vec<dto:
         .take(limit)
         .collect();
 
-    Ok(with_items(db, free)
+    summaries(db, free).await
+}
+
+/// Receipts as a list shows them: the conclusion about each one rather than its
+/// rows.
+async fn summaries(
+    db: &mut toasty::Db,
+    receipts: Vec<models::Receipt>,
+) -> toasty::Result<Vec<dto::ReceiptSummary>> {
+    Ok(with_items(db, receipts)
         .await?
         .iter()
         .map(|(receipt, items)| mappers::to_dto_summary(receipt, items))
         .collect())
+}
+
+/// Creates the row an upload gets read into, and hands back its id.
+///
+/// Deliberately minimal: everything else is unknown until extraction runs.
+/// `purchased_on` is provisionally today and `total` stays null — null means
+/// "not yet known", never zero.
+pub async fn create(
+    db: &mut toasty::Db,
+    image_path: &str,
+    today: jiff::civil::Date,
+) -> toasty::Result<uuid::Uuid> {
+    let receipt = toasty::create!(models::Receipt {
+        purchased_on: today,
+        merchant: "",
+        currency: "USD",
+        image_path: image_path,
+    })
+    .exec(db)
+    .await?;
+
+    Ok(receipt.id)
+}
+
+/// Puts a receipt the model gave up on back in the queue.
+///
+/// Only from `Failed`: one still extracting already has a job running, and a
+/// finished one has line items a second run would duplicate.
+pub async fn reset_for_retry(db: &mut toasty::Db, id: uuid::Uuid) -> anyhow::Result<()> {
+    let mut receipt = models::Receipt::get_by_id(db, &id)
+        .await
+        .context("no such receipt")?;
+
+    if receipt.status != models::ExtractionStatus::Failed {
+        anyhow::bail!("this receipt didn't fail — nothing to retry");
+    }
+
+    toasty::update!(receipt {
+        status: models::ExtractionStatus::Pending,
+        extraction_error: None,
+    })
+    .exec(db)
+    .await?;
+    Ok(())
+}
+
+/// Records that a human has checked this receipt against the photo.
+///
+/// Refuses while there is no total: reconciliation matches on it, so a reviewed
+/// receipt without one is a claim nothing can act on.
+pub async fn mark_reviewed(db: &mut toasty::Db, id: uuid::Uuid) -> anyhow::Result<()> {
+    let mut receipt = models::Receipt::get_by_id(db, &id)
+        .await
+        .context("no such receipt")?;
+
+    if receipt.total.is_none() {
+        anyhow::bail!("this receipt has no total yet — enter one before marking it reviewed");
+    }
+
+    toasty::update!(receipt {
+        reviewed_at: Some(jiff::Timestamp::now()),
+    })
+    .exec(db)
+    .await?;
+    Ok(())
 }
 
 /// A review-screen save, with every field already parsed.
@@ -228,7 +320,8 @@ pub async fn delete(db: &mut toasty::Db, id: uuid::Uuid) -> toasty::Result<Strin
 mod tests {
     use crate::server::mappers;
     use crate::server::models::{ExtractionStatus, LineItem, Receipt};
-    use crate::server::testing::{dec, memory_db};
+    use crate::server::testing::memory_db;
+    use crate::shared::testing::dec;
 
     /// Exercises the range matching searches through, against real SQLite: the
     /// ordering, the line-item fetch, and the problems that come with them.

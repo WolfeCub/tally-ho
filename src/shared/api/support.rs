@@ -33,17 +33,3 @@ pub async fn one_file(data: MultipartData, name: &str) -> (Option<String>, Vec<u
     }
     (filename, bytes)
 }
-
-/// Parses a human-typed amount, distinguishing "cleared" from "unparseable".
-pub fn optional_money(
-    field: &str,
-    raw: &str,
-) -> Result<Option<rust_decimal::Decimal>, ServerFnError> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Ok(None);
-    }
-    crate::server::parse::money(raw)
-        .map(Some)
-        .ok_or_else(|| ServerFnError::new(format!("could not read {field} {raw:?} as an amount")))
-}

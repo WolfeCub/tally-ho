@@ -9,7 +9,7 @@ use leptos::prelude::*;
 /// throw away what you typed — along with the message saying why.
 pub fn succeeded<I, O>(action: Action<I, Result<O, ServerFnError>>) -> bool
 where
-    I: Send + Sync + 'static,
+    I: 'static,
     O: Clone + Send + Sync + 'static,
 {
     matches!(action.value().get(), Some(Ok(_)))
@@ -17,7 +17,7 @@ where
 
 pub fn error_of<I, O>(action: Action<I, Result<O, ServerFnError>>) -> Option<ServerFnError>
 where
-    I: Send + Sync + 'static,
+    I: 'static,
     O: Clone + Send + Sync + 'static,
 {
     action.value().get().and_then(|r| r.err())

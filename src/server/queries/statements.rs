@@ -1,7 +1,7 @@
 //! Importing a statement, reading one back with its matches, and the summaries
 //! the list screen shows. The charges are next door in [`super::charges`].
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
@@ -20,23 +20,35 @@ pub async fn list(db: &mut toasty::Db) -> toasty::Result<Vec<dto::StatementSumma
         .exec(db)
         .await?;
 
-    let mut out = Vec::with_capacity(statements.len());
-    for statement in statements {
-        let charges = statement.charges().exec(db).await?;
-        out.push(dto::StatementSummary {
-            id: statement.id,
-            label: statement.label.clone(),
-            begins_on: statement.begins_on,
-            ends_on: statement.ends_on,
-            currency: statement.currency.clone(),
-            charge_count: charges.len(),
-            settled_count: charges
-                .iter()
-                .filter(|c| super::charges::settled(c))
-                .count(),
-        });
+    if statements.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(out)
+
+    // Every charge in one query and grouped here, rather than a query per
+    // statement — same reason as [`super::receipts::with_items`].
+    let mut charges: HashMap<Uuid, Vec<models::Charge>> = HashMap::new();
+    for charge in models::Charge::all().exec(db).await? {
+        charges.entry(charge.statement_id).or_default().push(charge);
+    }
+
+    Ok(statements
+        .into_iter()
+        .map(|statement| {
+            let charges = charges.remove(&statement.id).unwrap_or_default();
+            dto::StatementSummary {
+                id: statement.id,
+                label: statement.label,
+                begins_on: statement.begins_on,
+                ends_on: statement.ends_on,
+                currency: statement.currency,
+                charge_count: charges.len(),
+                settled_count: charges
+                    .iter()
+                    .filter(|c| super::charges::settled(c))
+                    .count(),
+            }
+        })
+        .collect())
 }
 
 /// Writes a parsed file and its charges, proposing a receipt where one is
@@ -109,7 +121,7 @@ pub async fn load(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<dto::Statemen
         // A matched receipt is deliberately absent from `free`, and may be
         // outside the window anyway if it was attached by hand.
         let matched = match row.receipt_id {
-            Some(receipt_id) => receipt(db, receipt_id).await?,
+            Some(receipt_id) => super::receipts::load(db, receipt_id).await?,
             None => None,
         };
 
@@ -219,7 +231,10 @@ fn to_matched(receipt: &dto::Receipt) -> dto::Matched {
 }
 
 /// The receipts still going spare near a statement's dates.
-async fn pool(
+///
+/// Public for `match_probe`, which dry-runs a statement against the real
+/// database and has to see the same pool an import would.
+pub async fn pool(
     db: &mut toasty::Db,
     begins_on: jiff::civil::Date,
     ends_on: jiff::civil::Date,
@@ -237,29 +252,26 @@ async fn pool(
         .collect())
 }
 
-async fn receipt(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<Option<dto::Receipt>> {
-    // Gone rather than an error: deleting a receipt clears the charges pointing
-    // at it, but a page loaded a moment earlier can still ask for one.
-    let Ok(receipt) = models::Receipt::get_by_id(db, &id).await else {
-        return Ok(None);
-    };
-    let items = receipt.line_items().exec(db).await?;
-    Ok(Some(mappers::to_dto_receipt(&receipt, &items)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::server::models::{Person, Receipt};
     use crate::server::queries::charges::resolve;
     use crate::server::queries::receipts;
-    use crate::server::testing::{dec, memory_db};
+    use crate::server::testing::memory_db;
+    use crate::shared::testing::dec;
     use rust_decimal::Decimal;
 
     /// A charge a receipt explains, and one nothing does.
     const CSV: &str = "Transaction Date,Description,Amount\n\
                        07/10/2026,COSTCO WHSE #1050,35.36\n\
                        07/11/2026,NETFLIX.COM,17.99\n";
+
+    /// Reads a file and imports it, which is what the API does with an upload.
+    async fn imported(db: &mut toasty::Db, label: &str, csv: &str) -> Uuid {
+        let parsed = statement_csv::charges(csv.as_bytes()).unwrap();
+        import(db, label, "USD", &parsed).await.unwrap()
+    }
 
     async fn people(db: &mut toasty::Db) -> (Uuid, Uuid) {
         let josh = toasty::create!(Person { name: "Josh" })
@@ -294,6 +306,32 @@ mod tests {
         .id
     }
 
+    /// The counts come off one query over every charge on the card, so this is
+    /// what catches a statement being credited with another one's charges.
+    #[tokio::test]
+    async fn the_list_counts_each_statements_own_charges() {
+        let mut db = memory_db().await;
+        let (josh, ash) = people(&mut db).await;
+        let receipt_id = costco(&mut db, josh, ash).await;
+
+        let july = imported(&mut db, "july.csv", CSV).await;
+        let august = "Date,Description,Amount\n08/02/2026,SPOTIFY,11.99\n";
+        imported(&mut db, "august.csv", august).await;
+
+        let charge_id = load(&mut db, july).await.unwrap().charges[0].id;
+        resolve(&mut db, charge_id, dto::Resolve::Receipt(receipt_id))
+            .await
+            .unwrap();
+
+        // Newest first, so August leads.
+        let rows = list(&mut db).await.unwrap();
+        let counts: Vec<_> = rows
+            .iter()
+            .map(|s| (s.label.as_str(), s.charge_count, s.settled_count))
+            .collect();
+        assert_eq!(counts, [("august.csv", 1, 0), ("july.csv", 2, 1)]);
+    }
+
     /// The whole path: import, propose, agree, and account for the rest.
     #[tokio::test]
     async fn a_statement_is_reconciled_one_charge_at_a_time() {
@@ -301,8 +339,7 @@ mod tests {
         let (josh, ash) = people(&mut db).await;
         let receipt_id = costco(&mut db, josh, ash).await;
 
-        let parsed = statement_csv::charges(CSV.as_bytes()).unwrap();
-        let id = import(&mut db, "july.csv", "USD", &parsed).await.unwrap();
+        let id = imported(&mut db, "july.csv", CSV).await;
 
         let statement = load(&mut db, id).await.unwrap();
         let (proposed, netflix) = (&statement.charges[0], &statement.charges[1]);
@@ -365,8 +402,7 @@ mod tests {
         let twice = "Date,Description,Amount\n\
                      07/10/2026,COSTCO WHSE #1050,35.36\n\
                      07/10/2026,COSTCO WHSE #1050,35.36\n";
-        let parsed = statement_csv::charges(twice.as_bytes()).unwrap();
-        let id = import(&mut db, "july.csv", "USD", &parsed).await.unwrap();
+        let id = imported(&mut db, "july.csv", twice).await;
 
         let statement = load(&mut db, id).await.unwrap();
         assert!(matches!(
@@ -404,8 +440,7 @@ mod tests {
         let (josh, ash) = people(&mut db).await;
         let receipt_id = costco(&mut db, josh, ash).await;
 
-        let parsed = statement_csv::charges(CSV.as_bytes()).unwrap();
-        let id = import(&mut db, "july.csv", "USD", &parsed).await.unwrap();
+        let id = imported(&mut db, "july.csv", CSV).await;
 
         // Created without a status, which is `Pending`: still being read, and
         // proposed against the Costco charge.
@@ -446,8 +481,7 @@ mod tests {
         let (josh, ash) = people(&mut db).await;
         let receipt_id = costco(&mut db, josh, ash).await;
 
-        let parsed = statement_csv::charges(CSV.as_bytes()).unwrap();
-        let id = import(&mut db, "july.csv", "USD", &parsed).await.unwrap();
+        let id = imported(&mut db, "july.csv", CSV).await;
         let charge_id = load(&mut db, id).await.unwrap().charges[0].id;
         resolve(&mut db, charge_id, dto::Resolve::Receipt(receipt_id))
             .await

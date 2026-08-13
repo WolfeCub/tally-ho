@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::frontend::actions::{error_of, succeeded};
 use crate::frontend::components::{
-    AS_BUTTON, BUTTON, Bar, DANGER, INPUT, Notice, PRIMARY, Tone, confirm, failed, form_element,
-    loading,
+    AS_BUTTON, BUTTON, Bar, DANGER, INPUT, Notice, PRIMARY, ROW, Tone, confirm, failed,
+    form_element, loading,
 };
 use crate::frontend::money::{money, money_total, shares_line};
 use crate::frontend::poll::poll_until_settled;
@@ -71,11 +71,7 @@ pub fn StatementsPage() -> impl IntoView {
         </form>
 
         {move || {
-            import
-                .value()
-                .get()
-                .and_then(|r| r.err())
-                .map(|e| view! { <Notice tone=Tone::Bad>{e.to_string()}</Notice> })
+            error_of(import).map(|e| view! { <Notice tone=Tone::Bad>{e.to_string()}</Notice> })
         }}
         {move || imported().map(|imported| view! { <ImportedCard imported /> })}
 
@@ -144,7 +140,7 @@ fn StatementRows(rows: Vec<StatementSummary>) -> impl IntoView {
                         <li>
                             <a
                                 href=format!("/reconcile/{}", s.id)
-                                class="flex min-h-14 items-center gap-3 rounded-lg border border-edge bg-surface p-3 no-underline active:bg-edge"
+                                class=ROW
                             >
                                 <span class="min-w-0 flex-1">
                                     <span class="block truncate">{s.label}</span>

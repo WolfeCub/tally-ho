@@ -4,15 +4,13 @@ use leptos::prelude::*;
 
 use crate::shared::dto;
 
+// Server-only, so these are behind a `cfg` rather than plain imports.
 #[cfg(feature = "ssr")]
-use anyhow::Context as _;
+use {super::support::db, crate::server::queries::people, anyhow::Context as _};
 
 /// Everyone a line item can be charged to, by name.
 #[server]
 pub async fn list_people() -> Result<Vec<dto::Person>, ServerFnError> {
-    use crate::server::queries::people;
-    use crate::shared::api::support::db;
-
     people::list(&mut db())
         .await
         .context("could not load people")
@@ -25,8 +23,7 @@ pub async fn list_people() -> Result<Vec<dto::Person>, ServerFnError> {
 /// goes back to unassigned.
 #[server]
 pub async fn save_people(people: Vec<dto::PersonSave>) -> Result<(), ServerFnError> {
-    use crate::server::queries::people::{self, Save};
-    use crate::shared::api::support::db;
+    use crate::server::queries::people::Save;
 
     let mut parsed = Vec::with_capacity(people.len());
     for person in people {

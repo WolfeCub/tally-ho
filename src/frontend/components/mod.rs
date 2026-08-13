@@ -29,5 +29,8 @@ pub const PRIMARY: &str = "min-h-11 rounded-lg bg-paper px-4 py-3 font-medium te
 /// Not undoable, so it shouldn't look like the way out.
 pub const DANGER: &str = "min-h-11 rounded-lg border border-danger px-4 py-3 text-danger \
                           disabled:opacity-40";
+/// A tappable row in a list: a receipt, a statement.
+pub const ROW: &str = "flex min-h-14 items-center gap-3 rounded-lg border border-edge bg-surface \
+                       p-3 no-underline active:bg-edge";
 /// An `<a>` that has to pass for a button.
 pub const AS_BUTTON: &str = "flex items-center justify-center no-underline";

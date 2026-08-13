@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::frontend::actions::{error_of, succeeded};
 use crate::frontend::components::{BUTTON, Bar, INPUT, Notice, PRIMARY, Tone, failed, loading};
+use crate::frontend::rows::{Keyed, Rows};
 use crate::frontend::text::bytes;
 use crate::shared::api::{disk_usage, list_people, save_people};
 use crate::shared::dto::{DiskUsage, Person, PersonSave};
@@ -102,16 +103,20 @@ fn DiskRow(disk: DiskUsage) -> impl IntoView {
     }
 }
 
-/// A person as the screen has them.
-///
-/// `key` is stable for the life of the row so [`For`] never rebuilds a box
-/// you're typing in. `id` is `None` until a row you added has been saved.
+/// A person as the screen has them. `id` is `None` until a row you added has been
+/// saved.
 #[derive(Clone)]
 struct Row {
     key: usize,
     id: Option<Uuid>,
     name: String,
     description: String,
+}
+
+impl Keyed for Row {
+    fn key(&self) -> usize {
+        self.key
+    }
 }
 
 #[component]
@@ -133,19 +138,13 @@ fn PeopleForm(
             })
             .collect::<Vec<_>>(),
     );
-    // Keys only have to be unique within this form, so a counter does.
-    let next_key = RwSignal::new(rows.get_untracked().len());
     let add_row = move || {
-        let key = next_key.get_untracked();
-        next_key.set(key + 1);
-        rows.update(|rows| {
-            rows.push(Row {
-                key,
-                id: None,
-                name: String::new(),
-                description: String::new(),
-            })
-        });
+        rows.add(|key| Row {
+            key,
+            id: None,
+            name: String::new(),
+            description: String::new(),
+        })
     };
 
     let save = Action::new(|people: &Vec<PersonSave>| save_people(people.clone()));
@@ -218,13 +217,8 @@ fn PeopleForm(
 #[component]
 fn PersonRow(row: Row, rows: RwSignal<Vec<Row>>) -> impl IntoView {
     let key = row.key;
-
     let edit = move |f: fn(&mut Row, String), value: String| {
-        rows.update(|rows| {
-            if let Some(row) = rows.iter_mut().find(|row| row.key == key) {
-                f(row, value);
-            }
-        });
+        rows.edit(key, move |row| f(row, value));
     };
 
     view! {
@@ -253,7 +247,7 @@ fn PersonRow(row: Row, rows: RwSignal<Vec<Row>>) -> impl IntoView {
                 type="button"
                 class="shrink-0 self-start rounded-lg border border-edge px-3 py-2 text-muted active:bg-edge"
                 aria-label="Remove this person"
-                on:click=move |_| rows.update(|rows| rows.retain(|row| row.key != key))
+                on:click=move |_| rows.remove(key)
             >
                 "✕"
             </button>

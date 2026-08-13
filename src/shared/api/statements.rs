@@ -6,8 +6,13 @@ use uuid::Uuid;
 
 use crate::shared::dto;
 
+// Server-only, so these are behind a `cfg` rather than plain imports.
 #[cfg(feature = "ssr")]
-use anyhow::Context as _;
+use {
+    super::support::{db, one_file},
+    crate::server::queries::statements,
+    anyhow::Context as _,
+};
 
 /// Reads an uploaded statement CSV, writes its charges, and proposes a receipt
 /// for the ones that are obvious.
@@ -18,13 +23,12 @@ use anyhow::Context as _;
 /// quietly doesn't match the card.
 #[server(input = MultipartFormData)]
 pub async fn import_statement(data: MultipartData) -> Result<dto::Imported, ServerFnError> {
-    use crate::server::queries::statements;
     use crate::server::state::AppState;
     use crate::server::statement_csv;
 
     let state = expect_context::<AppState>();
 
-    let (label, bytes) = super::support::one_file(data, "statement").await;
+    let (label, bytes) = one_file(data, "statement").await;
     if bytes.is_empty() {
         return Err(ServerFnError::new("no file was uploaded"));
     }
@@ -54,9 +58,7 @@ pub async fn import_statement(data: MultipartData) -> Result<dto::Imported, Serv
 /// Every statement imported, newest first.
 #[server]
 pub async fn list_statements() -> Result<Vec<dto::StatementSummary>, ServerFnError> {
-    use crate::server::queries::statements;
-
-    statements::list(&mut super::support::db())
+    statements::list(&mut db())
         .await
         .context("could not load statements")
         .map_err(ServerFnError::new)
@@ -66,9 +68,7 @@ pub async fn list_statements() -> Result<Vec<dto::StatementSummary>, ServerFnErr
 /// splits to.
 #[server]
 pub async fn get_statement(id: Uuid) -> Result<dto::Statement, ServerFnError> {
-    use crate::server::queries::statements;
-
-    statements::load(&mut super::support::db(), id)
+    statements::load(&mut db(), id)
         .await
         .context("could not load the statement")
         .map_err(ServerFnError::new)
@@ -77,9 +77,7 @@ pub async fn get_statement(id: Uuid) -> Result<dto::Statement, ServerFnError> {
 /// Poll target while a receipt photographed onto this statement is being read.
 #[server]
 pub async fn statement_reading(id: Uuid) -> Result<bool, ServerFnError> {
-    use crate::server::queries::statements;
-
-    statements::reading(&mut super::support::db(), id)
+    statements::reading(&mut db(), id)
         .await
         .context("could not check the statement")
         .map_err(ServerFnError::new)
@@ -94,7 +92,7 @@ pub async fn statement_reading(id: Uuid) -> Result<bool, ServerFnError> {
 pub async fn resolve_charge(charge_id: Uuid, how: dto::Resolve) -> Result<(), ServerFnError> {
     use crate::server::queries::charges;
 
-    charges::resolve(&mut super::support::db(), charge_id, how)
+    charges::resolve(&mut db(), charge_id, how)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
@@ -104,7 +102,7 @@ pub async fn resolve_charge(charge_id: Uuid, how: dto::Resolve) -> Result<(), Se
 pub async fn spare_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, ServerFnError> {
     use crate::server::queries::receipts;
 
-    receipts::spare(&mut super::support::db(), limit)
+    receipts::spare(&mut db(), limit)
         .await
         .context("could not load receipts")
         .map_err(ServerFnError::new)
@@ -113,9 +111,7 @@ pub async fn spare_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, Se
 /// Throws away a statement and its charges. The receipts stay.
 #[server]
 pub async fn delete_statement(id: Uuid) -> Result<(), ServerFnError> {
-    use crate::server::queries::statements;
-
-    statements::delete(&mut super::support::db(), id)
+    statements::delete(&mut db(), id)
         .await
         .context("could not delete the statement")
         .map_err(ServerFnError::new)

@@ -2,12 +2,9 @@
 
 use leptos::prelude::*;
 
+use super::ROW;
 use crate::frontend::text::{merchant, plural, total_or_why};
 use crate::shared::dto::ReceiptSummary;
-
-/// Named only because it's long enough to bury the markup it sits on.
-const ROW: &str = "flex min-h-14 items-center gap-3 rounded-lg border border-edge bg-surface p-3 \
-                   no-underline active:bg-edge";
 
 #[component]
 pub fn ReceiptRows(rows: Vec<ReceiptSummary>) -> impl IntoView {

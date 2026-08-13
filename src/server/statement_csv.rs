@@ -206,11 +206,7 @@ pub fn charges(bytes: &[u8]) -> Result<Parsed, ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr;
-
-    fn dec(s: &str) -> Decimal {
-        Decimal::from_str(s).unwrap()
-    }
+    use crate::shared::testing::dec;
 
     fn parsed(csv: &str) -> Parsed {
         charges(csv.as_bytes()).expect("should parse")

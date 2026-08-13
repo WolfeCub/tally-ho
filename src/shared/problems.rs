@@ -75,28 +75,9 @@ impl Receipt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::dto::ExtractionStatus;
-    use std::str::FromStr;
-    use uuid::Uuid;
+    use crate::shared::testing::{self, dec, item};
 
-    fn dec(s: &str) -> Decimal {
-        Decimal::from_str(s).unwrap()
-    }
-
-    fn item(total: &str) -> LineItem {
-        LineItem {
-            id: Uuid::nil(),
-            description: "x".into(),
-            quantity: None,
-            unit_price: None,
-            total: dec(total),
-            position: 0,
-            edited: false,
-            person_id: None,
-            guessed_why: None,
-        }
-    }
-
+    /// The checks are all about these three fields against the items.
     fn receipt(
         subtotal: Option<&str>,
         tax: Option<&str>,
@@ -104,17 +85,9 @@ mod tests {
         items: Vec<LineItem>,
     ) -> Receipt {
         Receipt {
-            id: Uuid::nil(),
-            purchased_on: jiff::civil::date(2026, 7, 1),
-            merchant: "M".into(),
             subtotal: subtotal.map(dec),
             tax: tax.map(dec),
-            total: total.map(dec),
-            currency: "USD".into(),
-            status: ExtractionStatus::Done,
-            extraction_error: None,
-            reviewed: false,
-            line_items: items,
+            ..testing::receipt(total, items)
         }
     }
 

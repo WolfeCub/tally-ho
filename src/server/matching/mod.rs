@@ -210,25 +210,15 @@ fn sole<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr;
+    use crate::shared::testing::{self, dec};
 
-    fn dec(s: &str) -> Decimal {
-        Decimal::from_str(s).unwrap()
-    }
-
+    /// A receipt for `total`, bought on a day in July.
     fn receipt(day: i8, total: &str) -> dto::Receipt {
         dto::Receipt {
             id: uuid::Uuid::new_v4(),
             purchased_on: jiff::civil::date(2026, 7, day),
             merchant: "Somewhere".into(),
-            subtotal: None,
-            tax: None,
-            total: Some(dec(total)),
-            currency: "USD".into(),
-            status: dto::ExtractionStatus::Done,
-            extraction_error: None,
-            reviewed: false,
-            line_items: Vec::new(),
+            ..testing::receipt(Some(total), Vec::new())
         }
     }
 

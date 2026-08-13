@@ -3,8 +3,8 @@
 //! Each one parses what came in, calls a query in [`crate::server::queries`], and
 //! turns an error into a message the screen can show.
 //!
-//! This all builds for wasm too, so every server-only import has to sit inside a
-//! function body, or behind a `cfg` if more than one body needs it.
+//! This all builds for wasm too, so a server-only import goes behind a `cfg` at
+//! the top, or inside the one body that needs it.
 
 pub mod people;
 pub mod receipts;

@@ -5,6 +5,7 @@ use leptos::web_sys::FormData;
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
+use crate::frontend::actions::error_of;
 use crate::frontend::components::{INPUT, Spinner};
 use crate::frontend::money::{money, shares_line};
 use crate::frontend::text::{merchant, plural, total_or_why};
@@ -379,11 +380,7 @@ fn Photograph(
         </form>
 
         {move || {
-            upload
-                .value()
-                .get()
-                .and_then(|r| r.err())
-                .map(|e| view! { <p class="mt-1 text-sm text-danger">{e.to_string()}</p> })
+            error_of(upload).map(|e| view! { <p class="mt-1 text-sm text-danger">{e.to_string()}</p> })
         }}
     }
 }

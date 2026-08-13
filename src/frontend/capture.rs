@@ -3,6 +3,7 @@
 use leptos::prelude::*;
 use leptos::web_sys::{FormData, SubmitEvent};
 
+use crate::frontend::actions::error_of;
 use crate::frontend::components::{
     AS_BUTTON, BUTTON, CameraIcon, Spinner, StepBar, Verdict, form_element,
 };
@@ -163,7 +164,7 @@ pub fn CapturePage() -> impl IntoView {
                                 // A failed upload has a reason worth reading. A
                                 // failed extraction doesn't — the receipt is
                                 // there to fill in.
-                                reason=upload.value().get().and_then(|r| r.err()).map(|e| e.to_string())
+                                reason=error_of(upload).map(|e| e.to_string())
                                 receipt_id=receipt_id.get().filter(|_| !stage.working())
                             />
                         }

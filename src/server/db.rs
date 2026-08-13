@@ -130,16 +130,9 @@ async fn apply_migrations(db: &toasty::Db) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use crate::server::models::{ExtractionStatus, Receipt};
+    use crate::server::testing::memory_db;
+    use crate::shared::testing::dec;
     use rust_decimal::Decimal;
-    use std::str::FromStr;
-
-    async fn test_db() -> toasty::Db {
-        super::connect_url("sqlite::memory:").await.unwrap()
-    }
-
-    fn dec(s: &str) -> Decimal {
-        Decimal::from_str(s).unwrap()
-    }
 
     /// Catches the mistake the migration workflow makes easy: editing a model
     /// and forgetting to generate the migration that goes with it. Tests build
@@ -182,7 +175,7 @@ mod tests {
 
     #[tokio::test]
     async fn creates_a_receipt_with_line_items_and_reads_them_back() {
-        let mut db = test_db().await;
+        let mut db = memory_db().await;
 
         let receipt = toasty::create!(Receipt {
             purchased_on: jiff::civil::date(2026, 7, 14),
@@ -215,7 +208,7 @@ mod tests {
     /// this is what makes `.ge()/.le()` correct rather than merely plausible.
     #[tokio::test]
     async fn date_range_filter_is_inclusive_at_both_ends() {
-        let mut db = test_db().await;
+        let mut db = memory_db().await;
 
         // One day either side of the range, plus both boundaries and a day in
         // the middle.

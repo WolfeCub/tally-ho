@@ -124,7 +124,7 @@ fn spelled_month(s: &str) -> Option<jiff::civil::Date> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::testing::dec;
+    use crate::shared::testing::dec;
 
     #[test]
     fn parses_plain_and_decorated_amounts() {

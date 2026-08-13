@@ -460,7 +460,7 @@ impl ExtractedReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::testing::dec;
+    use crate::shared::testing::dec;
 
     /// A model that mangles one field should not discard the rest.
     #[test]
