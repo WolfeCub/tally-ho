@@ -1,13 +1,11 @@
-//! The database side of reconciliation: importing a statement, reading one back
-//! with its matches, and recording what a human decided about a charge.
-
-pub mod parse;
+//! Importing a statement, reading one back with its matches, and the summaries
+//! the list screen shows. The charges are next door in [`super::charges`].
 
 use std::collections::HashSet;
 
 use uuid::Uuid;
 
-use crate::server::{mappers, matching, models, query};
+use crate::server::{mappers, matching, models, statement_csv};
 use crate::shared::dto;
 use crate::shared::reconcile::{charge_to, split_charge};
 
@@ -32,7 +30,10 @@ pub async fn list(db: &mut toasty::Db) -> toasty::Result<Vec<dto::StatementSumma
             ends_on: statement.ends_on,
             currency: statement.currency.clone(),
             charge_count: charges.len(),
-            settled_count: charges.iter().filter(|c| is_settled(c)).count(),
+            settled_count: charges
+                .iter()
+                .filter(|c| super::charges::settled(c))
+                .count(),
         });
     }
     Ok(out)
@@ -47,7 +48,7 @@ pub async fn import(
     db: &mut toasty::Db,
     label: &str,
     currency: &str,
-    parsed: &parse::Parsed,
+    parsed: &statement_csv::Parsed,
 ) -> anyhow::Result<Uuid> {
     let (begins_on, ends_on) = parsed.range();
     let free = pool(db, begins_on, ends_on).await?;
@@ -100,7 +101,7 @@ pub async fn load(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<dto::Statemen
     rows.sort_by_key(|charge| charge.position);
 
     let currency = statement.currency.as_str();
-    let people = query::list_people(db).await?;
+    let people = super::people::list(db).await?;
     let free = pool(db, statement.begins_on, statement.ends_on).await?;
 
     let mut charges = Vec::with_capacity(rows.len());
@@ -165,27 +166,6 @@ pub async fn load(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<dto::Statemen
     })
 }
 
-/// Receipts no charge accounts for, newest first. What the picker offers when
-/// nothing was suggested — a receipt whose date was misread is nowhere near the
-/// charge that paid for it.
-pub async fn spare(db: &mut toasty::Db, limit: usize) -> toasty::Result<Vec<dto::ReceiptSummary>> {
-    let taken = spoken_for(db).await?;
-    let free: Vec<_> = models::Receipt::all()
-        .order_by(models::Receipt::fields().purchased_on().desc())
-        .exec(db)
-        .await?
-        .into_iter()
-        .filter(|receipt| !taken.contains(&receipt.id))
-        .take(limit)
-        .collect();
-
-    Ok(query::with_items(db, free)
-        .await?
-        .iter()
-        .map(|(receipt, items)| mappers::to_dto_summary(receipt, items))
-        .collect())
-}
-
 /// Whether a receipt any of these charges points at is still being read.
 ///
 /// The reconcile screen's poll target, and two queries rather than the whole
@@ -201,49 +181,13 @@ pub async fn reading(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<bool> {
         .filter_map(|charge| charge.receipt_id)
         .collect();
 
-    // Every receipt rather than one query each, for the same reason as
-    // [`spoken_for`]: toasty has no `IN`, and there are a few hundred rows.
+    // Every receipt rather than one query each: toasty has no `IN`, and there
+    // are a few hundred rows.
     Ok(models::Receipt::all()
         .exec(db)
         .await?
         .into_iter()
         .any(|r| matched.contains(&r.id) && !mappers::to_dto_status(&r.status).is_terminal()))
-}
-
-/// Records what a human decided about one charge.
-pub async fn resolve(
-    db: &mut toasty::Db,
-    charge_id: Uuid,
-    how: dto::Resolve,
-) -> anyhow::Result<()> {
-    let mut charge = models::Charge::get_by_id(db, &charge_id).await?;
-
-    if let dto::Resolve::Receipt(receipt_id) = how {
-        // Taking a receipt off another charge would leave that one looking
-        // settled against nothing.
-        let held = models::Charge::filter(models::Charge::fields().receipt_id().eq(receipt_id))
-            .exec(db)
-            .await?;
-        if held.iter().any(|other| other.id != charge_id) {
-            anyhow::bail!("that receipt already accounts for another charge");
-        }
-    }
-
-    let (receipt_id, confirmed, no_receipt, person_id) = match how {
-        dto::Resolve::Receipt(receipt_id) => (Some(receipt_id), true, false, None),
-        dto::Resolve::NoReceipt { person_id } => (None, false, true, person_id),
-        dto::Resolve::Clear => (None, false, false, None),
-    };
-
-    toasty::update!(charge {
-        receipt_id: receipt_id,
-        confirmed: confirmed,
-        no_receipt: no_receipt,
-        person_id: person_id,
-    })
-    .exec(db)
-    .await?;
-    Ok(())
 }
 
 /// Throws away a statement and its charges.
@@ -260,10 +204,6 @@ pub async fn delete(db: &mut toasty::Db, id: Uuid) -> toasty::Result<()> {
     statement.delete().exec(&mut tx).await?;
 
     tx.commit().await
-}
-
-fn is_settled(charge: &models::Charge) -> bool {
-    charge.no_receipt || (charge.receipt_id.is_some() && charge.confirmed)
 }
 
 fn to_matched(receipt: &dto::Receipt) -> dto::Matched {
@@ -288,25 +228,12 @@ async fn pool(
     let begins_on = begins_on.checked_sub(slack).unwrap_or(begins_on);
     let ends_on = ends_on.checked_add(slack).unwrap_or(ends_on);
 
-    let taken = spoken_for(db).await?;
-    Ok(query::load_range(db, begins_on, ends_on)
+    let taken = super::charges::spoken_for(db).await?;
+    Ok(super::receipts::load_range(db, begins_on, ends_on)
         .await?
         .iter()
         .map(|(receipt, items)| mappers::to_dto_receipt(receipt, items))
         .filter(|receipt| !taken.contains(&receipt.id))
-        .collect())
-}
-
-/// Receipts already accounted for by a charge, on this statement or any other.
-///
-/// Every charge rather than a filtered query: toasty has no "is not null", and a
-/// card's worth of statements is a few hundred rows.
-async fn spoken_for(db: &mut toasty::Db) -> toasty::Result<HashSet<Uuid>> {
-    Ok(models::Charge::all()
-        .exec(db)
-        .await?
-        .into_iter()
-        .filter_map(|charge| charge.receipt_id)
         .collect())
 }
 
@@ -324,18 +251,10 @@ async fn receipt(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<Option<dto::Re
 mod tests {
     use super::*;
     use crate::server::models::{Person, Receipt};
+    use crate::server::queries::charges::resolve;
+    use crate::server::queries::receipts;
+    use crate::server::testing::{dec, memory_db};
     use rust_decimal::Decimal;
-    use std::str::FromStr;
-
-    fn dec(s: &str) -> Decimal {
-        Decimal::from_str(s).unwrap()
-    }
-
-    async fn memory_db() -> toasty::Db {
-        crate::server::db::connect_url("sqlite::memory:")
-            .await
-            .unwrap()
-    }
 
     /// A charge a receipt explains, and one nothing does.
     const CSV: &str = "Transaction Date,Description,Amount\n\
@@ -382,7 +301,7 @@ mod tests {
         let (josh, ash) = people(&mut db).await;
         let receipt_id = costco(&mut db, josh, ash).await;
 
-        let parsed = parse::charges(CSV.as_bytes()).unwrap();
+        let parsed = statement_csv::charges(CSV.as_bytes()).unwrap();
         let id = import(&mut db, "july.csv", "USD", &parsed).await.unwrap();
 
         let statement = load(&mut db, id).await.unwrap();
@@ -446,7 +365,7 @@ mod tests {
         let twice = "Date,Description,Amount\n\
                      07/10/2026,COSTCO WHSE #1050,35.36\n\
                      07/10/2026,COSTCO WHSE #1050,35.36\n";
-        let parsed = parse::charges(twice.as_bytes()).unwrap();
+        let parsed = statement_csv::charges(twice.as_bytes()).unwrap();
         let id = import(&mut db, "july.csv", "USD", &parsed).await.unwrap();
 
         let statement = load(&mut db, id).await.unwrap();
@@ -485,7 +404,7 @@ mod tests {
         let (josh, ash) = people(&mut db).await;
         let receipt_id = costco(&mut db, josh, ash).await;
 
-        let parsed = parse::charges(CSV.as_bytes()).unwrap();
+        let parsed = statement_csv::charges(CSV.as_bytes()).unwrap();
         let id = import(&mut db, "july.csv", "USD", &parsed).await.unwrap();
 
         // Created without a status, which is `Pending`: still being read, and
@@ -527,14 +446,14 @@ mod tests {
         let (josh, ash) = people(&mut db).await;
         let receipt_id = costco(&mut db, josh, ash).await;
 
-        let parsed = parse::charges(CSV.as_bytes()).unwrap();
+        let parsed = statement_csv::charges(CSV.as_bytes()).unwrap();
         let id = import(&mut db, "july.csv", "USD", &parsed).await.unwrap();
         let charge_id = load(&mut db, id).await.unwrap().charges[0].id;
         resolve(&mut db, charge_id, dto::Resolve::Receipt(receipt_id))
             .await
             .unwrap();
 
-        query::delete_receipt(&mut db, receipt_id).await.unwrap();
+        receipts::delete(&mut db, receipt_id).await.unwrap();
 
         let statement = load(&mut db, id).await.unwrap();
         assert!(matches!(

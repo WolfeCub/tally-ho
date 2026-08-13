@@ -9,7 +9,7 @@
 
 use rust_decimal::Decimal;
 
-use crate::server::extract::{parse_date, parse_money};
+use crate::server::parse;
 
 /// Some exports open with a line or two of account details before the header.
 const HEADER_SEARCH_ROWS: usize = 10;
@@ -102,10 +102,10 @@ impl Layout {
         let date = self.date.read(row);
         let amount = self.amount.read(row);
         Ok(ParsedCharge {
-            charged_on: parse_date(date).ok_or_else(|| format!("{date:?} is not a date"))?,
+            charged_on: parse::date(date).ok_or_else(|| format!("{date:?} is not a date"))?,
             // Zero counts as no amount: it's a summary artefact, not something
             // to reconcile.
-            amount: parse_money(amount)
+            amount: parse::money(amount)
                 .filter(|a| !a.is_zero())
                 .ok_or_else(|| format!("no amount in {amount:?}"))?,
             // Statements pad descriptions out with runs of spaces.

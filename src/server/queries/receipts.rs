@@ -1,7 +1,7 @@
-//! Queries that touch more than one row: the writes, and the date range
-//! matching searches through.
+//! Receipts, always with the line items that belong to them.
 
-use crate::server::models;
+use crate::server::{mappers, models};
+use crate::shared::dto;
 
 /// Receipts with their line items, in the order they came in.
 ///
@@ -33,6 +33,20 @@ pub async fn with_items(
         .collect())
 }
 
+/// The newest receipts, each with its line items. For the list tab.
+pub async fn recent(
+    db: &mut toasty::Db,
+    limit: usize,
+) -> toasty::Result<Vec<(models::Receipt, Vec<models::LineItem>)>> {
+    let receipts = models::Receipt::all()
+        .order_by(models::Receipt::fields().purchased_on().desc())
+        .limit(limit)
+        .exec(db)
+        .await?;
+
+    with_items(db, receipts).await
+}
+
 /// Receipts purchased in an inclusive date range, each with its line items.
 ///
 /// `purchased_on` is indexed and stored as ISO-8601 TEXT, which sorts
@@ -55,11 +69,32 @@ pub async fn load_range(
     with_items(db, receipts).await
 }
 
+/// Receipts no charge accounts for, newest first. What the picker offers when
+/// nothing was suggested — a receipt whose date was misread is nowhere near the
+/// charge that paid for it.
+pub async fn spare(db: &mut toasty::Db, limit: usize) -> toasty::Result<Vec<dto::ReceiptSummary>> {
+    let taken = super::charges::spoken_for(db).await?;
+    let free: Vec<_> = models::Receipt::all()
+        .order_by(models::Receipt::fields().purchased_on().desc())
+        .exec(db)
+        .await?
+        .into_iter()
+        .filter(|receipt| !taken.contains(&receipt.id))
+        .take(limit)
+        .collect();
+
+    Ok(with_items(db, free)
+        .await?
+        .iter()
+        .map(|(receipt, items)| mappers::to_dto_summary(receipt, items))
+        .collect())
+}
+
 /// A review-screen save, with every field already parsed.
 ///
 /// Parsing happens before this is built so a typo in one box can't leave the
 /// receipt half-written.
-pub struct ReceiptSave {
+pub struct Save {
     pub merchant: String,
     pub purchased_on: jiff::civil::Date,
     pub currency: String,
@@ -67,10 +102,10 @@ pub struct ReceiptSave {
     pub tax: Option<rust_decimal::Decimal>,
     pub total: Option<rust_decimal::Decimal>,
     /// The items the receipt should end up with, in screen order.
-    pub items: Vec<ItemSave>,
+    pub items: Vec<SaveItem>,
 }
 
-pub struct ItemSave {
+pub struct SaveItem {
     /// `None` for a row the human added.
     pub id: Option<uuid::Uuid>,
     pub description: String,
@@ -83,11 +118,7 @@ pub struct ItemSave {
 ///
 /// One transaction — items dropped without the total that justified them reads
 /// as a genuine receipt, and nothing would flag it.
-pub async fn save_receipt(
-    db: &mut toasty::Db,
-    id: uuid::Uuid,
-    save: ReceiptSave,
-) -> toasty::Result<()> {
+pub async fn save(db: &mut toasty::Db, id: uuid::Uuid, save: Save) -> toasty::Result<()> {
     let mut tx = db.transaction().await?;
 
     let mut receipt = models::Receipt::get_by_id(&mut tx, &id).await?;
@@ -159,64 +190,11 @@ pub async fn save_receipt(
     tx.commit().await
 }
 
-/// Writes what the model guessed about a receipt's items, and hands back how many
-/// it named. The two lists line up, so the items must be in the order they were
-/// guessed about.
-///
-/// A guess replaces the last guess and never an answer. That an item was
-/// deliberately left unassigned isn't recorded anywhere, so it can be guessed at
-/// again.
-pub async fn apply_guesses(
-    db: &mut toasty::Db,
-    items: Vec<models::LineItem>,
-    guesses: Vec<Option<crate::server::assign::Guess>>,
-) -> toasty::Result<usize> {
-    let mut named = 0;
-    let mut tx = db.transaction().await?;
-
-    for (mut item, guess) in items.into_iter().zip(guesses) {
-        if crate::server::assign::decided(&item) {
-            continue;
-        }
-        named += usize::from(guess.is_some());
-
-        let (person_id, why) = match guess {
-            Some(guess) => (Some(guess.person_id), Some(guess.why)),
-            None => (None, None),
-        };
-        // Saying the same thing again is not worth a write.
-        if item.person_id == person_id && item.guessed_why == why {
-            continue;
-        }
-
-        toasty::update!(item {
-            person_id: person_id,
-            guessed_why: why,
-        })
-        .exec(&mut tx)
-        .await?;
-    }
-
-    tx.commit().await?;
-    Ok(named)
-}
-
-/// Everyone a line item can be charged to, by name.
-pub async fn list_people(db: &mut toasty::Db) -> toasty::Result<Vec<crate::shared::dto::Person>> {
-    Ok(models::Person::all()
-        .order_by(models::Person::fields().name().asc())
-        .exec(db)
-        .await?
-        .iter()
-        .map(crate::server::mappers::to_dto_person)
-        .collect())
-}
-
 /// Deletes a receipt and its line items, handing back the image path so the
 /// caller can remove the photo once the rows are actually gone.
 ///
 /// Nothing cascades, so the items go first.
-pub async fn delete_receipt(db: &mut toasty::Db, id: uuid::Uuid) -> toasty::Result<String> {
+pub async fn delete(db: &mut toasty::Db, id: uuid::Uuid) -> toasty::Result<String> {
     let mut tx = db.transaction().await?;
 
     let receipt = models::Receipt::get_by_id(&mut tx, &id).await?;
@@ -246,92 +224,17 @@ pub async fn delete_receipt(db: &mut toasty::Db, id: uuid::Uuid) -> toasty::Resu
     Ok(image_path)
 }
 
-/// A person as the settings screen left them, already parsed.
-pub struct PersonSave {
-    /// `None` for someone the human added.
-    pub id: Option<uuid::Uuid>,
-    pub name: String,
-    pub description: Option<String>,
-}
-
-/// Writes the settings screen in one go: everyone it ended up with, as a
-/// complete replacement for whoever is stored.
-///
-/// One transaction — a half-applied save could leave items charged to somebody
-/// who was meant to be gone.
-pub async fn save_people(db: &mut toasty::Db, people: Vec<PersonSave>) -> toasty::Result<()> {
-    let mut tx = db.transaction().await?;
-
-    let mut existing: std::collections::HashMap<_, _> = models::Person::all()
-        .exec(&mut tx)
-        .await?
-        .into_iter()
-        .map(|person| (person.id, person))
-        .collect();
-
-    for person in people {
-        // Removing as we go, so what's left over is who the human removed. An
-        // id that isn't there any more falls through to a create.
-        match person.id.and_then(|id| existing.remove(&id)) {
-            Some(mut row) => {
-                toasty::update!(row {
-                    name: person.name,
-                    description: person.description,
-                })
-                .exec(&mut tx)
-                .await?;
-            }
-            None => {
-                toasty::create!(models::Person {
-                    name: person.name,
-                    description: person.description,
-                })
-                .exec(&mut tx)
-                .await?;
-            }
-        }
-    }
-
-    for person in existing.into_values() {
-        // Nothing cascades, and an item pointing at somebody who isn't there
-        // would be neither assigned nor unassigned — it would drop out of both
-        // halves of the split.
-        for mut item in
-            models::LineItem::filter(models::LineItem::fields().person_id().eq(person.id))
-                .exec(&mut tx)
-                .await?
-        {
-            toasty::update!(item {
-                person_id: None,
-                guessed_why: None,
-            })
-            .exec(&mut tx)
-            .await?;
-        }
-        person.delete().exec(&mut tx).await?;
-    }
-
-    tx.commit().await
-}
-
 #[cfg(test)]
 mod tests {
     use crate::server::mappers;
-    use crate::server::models::{ExtractionStatus, Receipt};
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
-
-    fn dec(s: &str) -> Decimal {
-        Decimal::from_str(s).unwrap()
-    }
+    use crate::server::models::{ExtractionStatus, LineItem, Receipt};
+    use crate::server::testing::{dec, memory_db};
 
     /// Exercises the range matching searches through, against real SQLite: the
     /// ordering, the line-item fetch, and the problems that come with them.
     #[tokio::test]
     async fn a_date_range_loads_in_order_with_its_items() {
-        let mut db = crate::server::db::connect_url("sqlite::memory:")
-            .await
-            .unwrap();
+        let mut db = memory_db().await;
 
         // Inserted newest-first so a passing order assertion means `order_by`
         // did the work, not insertion order. Both are marked read, because the
@@ -411,11 +314,7 @@ mod tests {
     /// and an orphan would still be counted by anything loading items directly.
     #[tokio::test]
     async fn deleting_a_receipt_takes_its_line_items_with_it() {
-        use crate::server::models::LineItem;
-
-        let mut db = crate::server::db::connect_url("sqlite::memory:")
-            .await
-            .unwrap();
+        let mut db = memory_db().await;
 
         let doomed = toasty::create!(Receipt {
             purchased_on: jiff::civil::date(2026, 7, 20),
@@ -445,7 +344,7 @@ mod tests {
         .await
         .unwrap();
 
-        let image_path = super::delete_receipt(&mut db, doomed.id).await.unwrap();
+        let image_path = super::delete(&mut db, doomed.id).await.unwrap();
         assert_eq!(
             image_path, "images/2026/07/doomed.jpg",
             "for the file delete"
@@ -478,11 +377,7 @@ mod tests {
     /// screen sends the list it ended up with, not a diff.
     #[tokio::test]
     async fn saving_a_receipt_replaces_its_line_items() {
-        use crate::server::models::LineItem;
-
-        let mut db = crate::server::db::connect_url("sqlite::memory:")
-            .await
-            .unwrap();
+        let mut db = memory_db().await;
 
         let receipt = toasty::create!(Receipt {
             purchased_on: jiff::civil::date(2026, 7, 20),
@@ -504,10 +399,10 @@ mod tests {
         let milk = before.iter().find(|i| i.description == "Milk").unwrap();
         let eggs = before.iter().find(|i| i.description == "Eggs").unwrap();
 
-        super::save_receipt(
+        super::save(
             &mut db,
             receipt.id,
-            super::ReceiptSave {
+            super::Save {
                 merchant: "Costco".into(),
                 purchased_on: jiff::civil::date(2026, 7, 21),
                 currency: "USD".into(),
@@ -516,21 +411,21 @@ mod tests {
                 total: Some(dec("32.50")),
                 items: vec![
                     // Untouched.
-                    super::ItemSave {
+                    super::SaveItem {
                         id: Some(milk.id),
                         description: "Milk".into(),
                         total: dec("10.00"),
                         person_id: None,
                     },
                     // Corrected.
-                    super::ItemSave {
+                    super::SaveItem {
                         id: Some(eggs.id),
                         description: "Eggs".into(),
                         total: dec("12.00"),
                         person_id: None,
                     },
                     // Added on screen. "Misread" is absent, so it goes.
-                    super::ItemSave {
+                    super::SaveItem {
                         id: None,
                         description: "Bread".into(),
                         total: dec("8.00"),
@@ -578,9 +473,7 @@ mod tests {
     async fn picking_somebody_yourself_settles_a_guess() {
         use crate::server::models::Person;
 
-        let mut db = crate::server::db::connect_url("sqlite::memory:")
-            .await
-            .unwrap();
+        let mut db = memory_db().await;
 
         let josh = toasty::create!(Person { name: "Josh" })
             .exec(&mut db)
@@ -609,17 +502,17 @@ mod tests {
 
         let mut before = receipt.line_items().exec(&mut db).await.unwrap();
         before.sort_by_key(|item| item.position);
-        let save = |item: &crate::server::models::LineItem, person_id| super::ItemSave {
+        let save = |item: &LineItem, person_id| super::SaveItem {
             id: Some(item.id),
             description: item.description.clone(),
             total: item.total,
             person_id,
         };
 
-        super::save_receipt(
+        super::save(
             &mut db,
             receipt.id,
-            super::ReceiptSave {
+            super::Save {
                 merchant: "Costco".into(),
                 purchased_on: jiff::civil::date(2026, 7, 20),
                 currency: "USD".into(),
@@ -655,79 +548,14 @@ mod tests {
         );
     }
 
-    /// One save has to rename, add and remove people at once — the settings
-    /// screen sends the list it ended up with, not a diff.
-    #[tokio::test]
-    async fn saving_people_replaces_the_whole_list() {
-        use crate::server::models::Person;
-
-        let mut db = crate::server::db::connect_url("sqlite::memory:")
-            .await
-            .unwrap();
-
-        let josh = toasty::create!(Person { name: "Josh" })
-            .exec(&mut db)
-            .await
-            .unwrap();
-        let typo = toasty::create!(Person { name: "Asj" })
-            .exec(&mut db)
-            .await
-            .unwrap();
-
-        super::save_people(
-            &mut db,
-            vec![
-                // Untouched.
-                super::PersonSave {
-                    id: Some(josh.id),
-                    name: "Josh".into(),
-                    description: None,
-                },
-                // Corrected, and described.
-                super::PersonSave {
-                    id: Some(typo.id),
-                    name: "Ash".into(),
-                    description: Some("the other card".into()),
-                },
-                // Added on screen.
-                super::PersonSave {
-                    id: None,
-                    name: "Guest".into(),
-                    description: None,
-                },
-            ],
-        )
-        .await
-        .unwrap();
-
-        let mut people = Person::all().exec(&mut db).await.unwrap();
-        people.sort_by(|a, b| a.name.cmp(&b.name));
-        let got: Vec<_> = people
-            .iter()
-            .map(|p| (p.name.as_str(), p.description.as_deref()))
-            .collect();
-        assert_eq!(
-            got,
-            [
-                ("Ash", Some("the other card")),
-                ("Guest", None),
-                ("Josh", None),
-            ]
-        );
-        // Renaming edits the row rather than replacing it, so anything charged
-        // to them stays charged to them.
-        assert_eq!(people[0].id, typo.id);
-    }
-
     /// Assignments survive a save, and dropping someone hands their items back
     /// rather than leaving them pointed at a person who no longer exists.
     #[tokio::test]
     async fn removing_a_person_unassigns_their_items() {
         use crate::server::models::Person;
+        use crate::server::queries::people;
 
-        let mut db = crate::server::db::connect_url("sqlite::memory:")
-            .await
-            .unwrap();
+        let mut db = memory_db().await;
 
         let josh = toasty::create!(Person { name: "Josh" })
             .exec(&mut db)
@@ -760,10 +588,10 @@ mod tests {
         let milk = before.iter().find(|i| i.description == "Milk").unwrap();
         let food = before.iter().find(|i| i.description == "Dog food").unwrap();
 
-        super::save_receipt(
+        super::save(
             &mut db,
             receipt.id,
-            super::ReceiptSave {
+            super::Save {
                 merchant: "Costco".into(),
                 purchased_on: jiff::civil::date(2026, 7, 20),
                 currency: "USD".into(),
@@ -771,13 +599,13 @@ mod tests {
                 tax: None,
                 total: Some(dec("30.00")),
                 items: vec![
-                    super::ItemSave {
+                    super::SaveItem {
                         id: Some(milk.id),
                         description: "Milk".into(),
                         total: dec("10.00"),
                         person_id: Some(josh.id),
                     },
-                    super::ItemSave {
+                    super::SaveItem {
                         id: Some(food.id),
                         description: "Dog food".into(),
                         total: dec("20.00"),
@@ -789,7 +617,7 @@ mod tests {
         .await
         .unwrap();
 
-        let assigned = |items: &[crate::server::models::LineItem], description: &str| {
+        let assigned = |items: &[LineItem], description: &str| {
             items
                 .iter()
                 .find(|i| i.description == description)
@@ -802,9 +630,9 @@ mod tests {
         assert_eq!(assigned(&items, "Dog food"), Some(ash.id));
 
         // Josh is absent from the save, so he goes.
-        super::save_people(
+        people::save(
             &mut db,
-            vec![super::PersonSave {
+            vec![people::Save {
                 id: Some(ash.id),
                 name: "Ash".into(),
                 description: None,

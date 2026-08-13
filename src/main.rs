@@ -64,7 +64,7 @@ async fn export_csv(
     use axum::response::IntoResponse;
 
     let mut db = state.db.clone();
-    let statement = match tally_ho::server::statements::load(&mut db, id).await {
+    let statement = match tally_ho::server::queries::statements::load(&mut db, id).await {
         Ok(statement) => statement,
         Err(e) => {
             return (StatusCode::NOT_FOUND, format!("no such statement: {e}")).into_response();

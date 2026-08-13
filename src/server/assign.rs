@@ -20,7 +20,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::server::{ask, extract, models, query};
+use crate::server::{ask, extract, models, queries};
 use crate::shared::dto;
 
 /// Roughly 25 output tokens an item, so this covers a long grocery receipt. It's
@@ -258,7 +258,7 @@ pub async fn suggest(
     assigner: &dyn ItemAssigner,
     receipt_id: Uuid,
 ) -> anyhow::Result<usize> {
-    let people = query::list_people(db).await?;
+    let people = queries::people::list(db).await?;
     if !people.iter().any(dto::Person::described) {
         return Ok(0);
     }
@@ -277,7 +277,7 @@ pub async fn suggest(
         .await?;
 
     let guesses = resolve(&people, items.len(), &said);
-    let named = query::apply_guesses(db, items, guesses).await?;
+    let named = queries::line_items::apply_guesses(db, items, guesses).await?;
     tracing::info!(%receipt_id, named, "guessed who owes what");
     Ok(named)
 }
@@ -291,6 +291,7 @@ pub fn decided(item: &models::LineItem) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::testing::memory_db;
 
     fn person(n: u128, name: &str, description: Option<&str>) -> dto::Person {
         dto::Person {
@@ -440,12 +441,6 @@ mod tests {
             *self.asked.lock().unwrap() = items.iter().map(|i| i.to_string()).collect();
             Ok(self.answer.clone())
         }
-    }
-
-    async fn memory_db() -> toasty::Db {
-        crate::server::db::connect_url("sqlite::memory:")
-            .await
-            .unwrap()
     }
 
     /// Josh, who drinks the beer, and Ash, who doesn't eat meat.
