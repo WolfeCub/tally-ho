@@ -62,6 +62,13 @@ fn Info() -> impl IntoView {
                     }
                 })}
             </Transition>
+
+            <div class="mt-3 rounded-lg border border-edge bg-surface p-3">
+                <div class="flex flex-wrap items-baseline justify-between gap-x-3">
+                    <span>"Version"</span>
+                    <span class="tabular-nums text-muted">{crate::VERSION}</span>
+                </div>
+            </div>
         </section>
     }
 }

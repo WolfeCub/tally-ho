@@ -9,6 +9,8 @@
 pub mod frontend;
 pub mod shared;
 
+pub const VERSION: &str = include_str!("../VERSION").trim_ascii();
+
 // toasty and the SQLite driver would never build for wasm32 anyway.
 #[cfg(feature = "ssr")]
 pub mod server;

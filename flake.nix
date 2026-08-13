@@ -53,6 +53,8 @@
             craneLib.filterCargoSources path type
             || pkgs.lib.hasSuffix ".css" path
             || pkgs.lib.hasSuffix ".sql" path
+            # The settings screen reads this at compile time.
+            || pkgs.lib.hasSuffix "/VERSION" path
             # Tailwind reads this to decide what to scan. Without it it walks
             # target/ and pulls classes out of our deps.
             || pkgs.lib.hasSuffix "/.gitignore" path
