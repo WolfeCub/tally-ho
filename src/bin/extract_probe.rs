@@ -66,6 +66,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let n = extraction.receipt.normalize();
 
+        // First, so a wrong item can be read straight off against the fields
+        // below it: wrong here is the photo misread, wrong only below is the
+        // structuring.
+        if let Some(transcript) = &extraction.ocr_transcript {
+            println!("  transcript:");
+            for line in transcript.lines() {
+                println!("    | {line}");
+            }
+        }
+
         println!("  elapsed:   {:.1}s", extraction.elapsed.as_secs_f32());
         println!("  merchant:  {:?}", n.merchant);
         println!("  date:      {:?}", n.purchased_on);

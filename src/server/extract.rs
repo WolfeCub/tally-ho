@@ -207,8 +207,14 @@ pub enum ExtractError {
 #[derive(Debug, Clone)]
 pub struct Extraction {
     pub receipt: ExtractedReceipt,
-    /// Verbatim model output, retained for debugging bad extractions.
-    pub raw: String,
+    /// What the OCR model read off the photo, before any of it was structured.
+    /// `None` when one model does both, so there was never a separate read.
+    pub ocr_transcript: Option<String>,
+    /// Verbatim output of the model that turned the transcript into JSON.
+    ///
+    /// Kept beside [`Self::ocr_transcript`] because between them they say which
+    /// of the two stages got an item wrong, which is otherwise guesswork.
+    pub structuring_raw: String,
     pub model: String,
     pub elapsed: Duration,
 }
@@ -341,6 +347,7 @@ impl ReceiptExtractor for OllamaExtractor {
         };
 
         let started = Instant::now();
+        let mut ocr_transcript = None;
         let message = match &self.ocr {
             // Reading and structuring are separate skills, so they're separate
             // models: this one transcribes, and the schema-bound one below never
@@ -353,20 +360,23 @@ impl ReceiptExtractor for OllamaExtractor {
                     Some(self.config.ocr_context),
                 )
                 .await?;
-                Message::user(format!("The receipt, transcribed:\n\n{transcript}"))
+                let message = Message::user(format!("The receipt, transcribed:\n\n{transcript}"));
+                ocr_transcript = Some(transcript);
+                message
             }
             None => photo("Extract every line item from this receipt."),
         };
 
         // No ceiling passed: this agent runs on whatever context Ollama is
         // configured with, so there's nothing to compare against.
-        let raw = ask::once(&self.agent, message, REQUEST_TIMEOUT, None).await?;
+        let structuring_raw = ask::once(&self.agent, message, REQUEST_TIMEOUT, None).await?;
         let elapsed = started.elapsed();
-        let receipt: ExtractedReceipt = serde_json::from_str(&raw)?;
+        let receipt: ExtractedReceipt = serde_json::from_str(&structuring_raw)?;
 
         Ok(Extraction {
             receipt,
-            raw,
+            ocr_transcript,
+            structuring_raw,
             model: self.config.label(),
             elapsed,
         })
