@@ -6,15 +6,17 @@ use crate::shared::dto;
 
 // Server-only, so these are behind a `cfg` rather than plain imports.
 #[cfg(feature = "ssr")]
-use {super::support::db, crate::server::queries::people, anyhow::Context as _};
+use {
+    super::support::{Reported as _, db},
+    crate::server::queries::people,
+};
 
 /// Everyone a line item can be charged to, by name.
 #[server]
 pub async fn list_people() -> Result<Vec<dto::Person>, ServerFnError> {
     people::list(&mut db())
         .await
-        .context("could not load people")
-        .map_err(ServerFnError::new)
+        .reported_as("could not load people")
 }
 
 /// Applies the settings screen: everyone it ended up with, in one write.
@@ -48,6 +50,5 @@ pub async fn save_people(people: Vec<dto::PersonSave>) -> Result<(), ServerFnErr
 
     people::save(&mut db(), parsed)
         .await
-        .context("could not save people")
-        .map_err(ServerFnError::new)
+        .reported_as("could not save people")
 }

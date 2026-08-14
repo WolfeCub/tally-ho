@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use rig_agent::agent::{Agent, OutputMode};
-use rig_agent::prelude::*;
 use rig_core::message::Message;
 use rig_core::providers::ollama;
 use schemars::JsonSchema;
@@ -130,20 +129,18 @@ pub struct OllamaAssigner {
 
 impl OllamaAssigner {
     pub fn new(config: Config) -> Result<Self, ask::Error> {
-        // `think` off, temperature 0 and a Native schema for the same reasons as
-        // extraction, which documents each of them.
-        let agent = ask::client(&config.url)?
-            .agent(&config.model)
-            .preamble(PROMPT)
-            .temperature(0.0)
-            .additional_params(ask::options(
-                config.keep_alive.as_deref(),
-                serde_json::json!({ "think": false }),
-            ))
-            .max_tokens(MAX_OUTPUT_TOKENS)
-            .output_schema::<Assignments>()
-            .output_mode(OutputMode::Native)
-            .build();
+        let client = ask::client(&config.url)?;
+        let agent = ask::agent(
+            &client,
+            &config.model,
+            config.keep_alive.as_deref(),
+            ask::no_thinking(),
+        )
+        .preamble(PROMPT)
+        .max_tokens(MAX_OUTPUT_TOKENS)
+        .output_schema::<Assignments>()
+        .output_mode(OutputMode::Native)
+        .build();
 
         Ok(Self {
             agent,

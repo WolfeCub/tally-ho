@@ -1,6 +1,8 @@
 //! Plumbing shared by the server functions. Server-only, so nothing here needs
 //! a `cfg`.
 
+use std::fmt::Display;
+
 use leptos::prelude::*;
 use leptos::server_fn::codec::MultipartData;
 
@@ -32,4 +34,26 @@ pub async fn one_file(data: MultipartData, name: &str) -> (Option<String>, Vec<u
         break;
     }
     (filename, bytes)
+}
+
+/// How every server function ends: an error the screen can show.
+///
+/// `ServerFnError` carries a string across the wire, so the cause has to be
+/// flattened into the message or it's gone for good.
+pub trait Reported<T> {
+    /// The error in its own words, for one already written for a human.
+    fn reported(self) -> Result<T, ServerFnError>;
+
+    /// The error behind a sentence saying what we were trying to do.
+    fn reported_as(self, what: &str) -> Result<T, ServerFnError>;
+}
+
+impl<T, E: Display> Reported<T> for Result<T, E> {
+    fn reported(self) -> Result<T, ServerFnError> {
+        self.map_err(|e| ServerFnError::new(e.to_string()))
+    }
+
+    fn reported_as(self, what: &str) -> Result<T, ServerFnError> {
+        self.map_err(|e| ServerFnError::new(format!("{what}: {e}")))
+    }
 }

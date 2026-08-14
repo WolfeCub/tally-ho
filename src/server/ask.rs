@@ -5,7 +5,8 @@
 
 use std::time::Duration;
 
-use rig_agent::agent::Agent;
+use rig_agent::agent::{Agent, AgentBuilder};
+use rig_agent::prelude::*;
 use rig_core::client::Nothing;
 use rig_core::message::Message;
 use rig_core::providers::ollama;
@@ -33,14 +34,37 @@ pub fn client(url: &str) -> Result<ollama::Client, Error> {
         .map_err(|e| Error::Prompt(e.to_string()))
 }
 
-/// `options` with the residency policy added, which has to ride along on every
-/// request: `keep_alive` restarts the clock per call rather than being a property
-/// of the loaded model, so sending it once wouldn't hold.
-pub fn options(keep_alive: Option<&str>, mut options: serde_json::Value) -> serde_json::Value {
+/// An agent against one Ollama model, greedy and staying loaded. The caller adds
+/// what makes it its own: a preamble, a schema, a token ceiling.
+pub fn agent(
+    client: &ollama::Client,
+    model: &str,
+    keep_alive: Option<&str>,
+    mut options: serde_json::Value,
+) -> AgentBuilder<ollama::CompletionModel> {
+    // `keep_alive` restarts the clock per call rather than sticking to the loaded
+    // model, so it has to ride along on every request.
     if let Some(keep_alive) = keep_alive {
         options["keep_alive"] = serde_json::Value::String(keep_alive.to_string());
     }
-    options
+
+    client
+        .agent(model)
+        // At the default temperature about a third of gemma4:12b runs came back
+        // empty, all null, or with junk inside a string field. The grammar
+        // constrains the shape, not what goes in a string.
+        .temperature(0.0)
+        .additional_params(options)
+}
+
+/// Thinking off, for [`agent`]'s options.
+///
+/// Ollama turns it on by default for gemma4:12b, and the reasoning ate the whole
+/// token budget: 47s of it, then empty content and what looked like a parse
+/// error. Only for models that have it — Ollama rejects the field on ones that
+/// don't, which is why the OCR model goes without.
+pub fn no_thinking() -> serde_json::Value {
+    serde_json::json!({ "think": false })
 }
 
 /// The JSON schema for `T`, with every field of the top-level object required.

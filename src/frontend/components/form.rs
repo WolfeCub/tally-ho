@@ -5,7 +5,10 @@
 //! input. The server returns the whole receipt after each save, so there's
 //! nothing worth keeping in sync between keystrokes.
 
+use std::future::Future;
+
 use leptos::prelude::*;
+use leptos::server_fn::codec::MultipartData;
 use leptos::web_sys::{FormData, HtmlFormElement, SubmitEvent};
 
 use super::INPUT;
@@ -35,6 +38,35 @@ pub fn LabeledInput(
                 class=INPUT
             />
         </label>
+    }
+}
+
+/// An action that posts a form to a server function taking a multipart body.
+///
+/// `_local` because `FormData` is not `Send`, and nothing is lost by it: an
+/// upload only ever runs in the browser.
+pub fn upload_action<O, Fut>(
+    send: impl Fn(MultipartData) -> Fut + 'static,
+) -> Action<FormData, Result<O, ServerFnError>>
+where
+    O: Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<O, ServerFnError>> + 'static,
+{
+    Action::new_local(move |data: &FormData| send(data.clone().into()))
+}
+
+/// An `on:submit` that sends the form to `action` instead of navigating.
+pub fn uploads_to<O>(
+    action: Action<FormData, Result<O, ServerFnError>>,
+) -> impl Fn(SubmitEvent) + Copy + 'static
+where
+    O: Clone + Send + Sync + 'static,
+{
+    move |ev: SubmitEvent| {
+        ev.prevent_default();
+        if let Ok(data) = FormData::new_with_form(&form_element(&ev)) {
+            action.dispatch_local(data);
+        }
     }
 }
 

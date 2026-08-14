@@ -5,7 +5,7 @@ use leptos::prelude::*;
 use crate::shared::dto;
 
 #[cfg(feature = "ssr")]
-use anyhow::Context as _;
+use super::support::Reported as _;
 
 /// Room left on the volume the photos and the database sit on.
 #[server]
@@ -15,7 +15,8 @@ pub async fn disk_usage() -> Result<dto::DiskUsage, ServerFnError> {
     let state = expect_context::<AppState>();
     let root = state.store.root();
 
-    crate::server::disk::usage(root)
-        .with_context(|| format!("could not read the free space at {}", root.display()))
-        .map_err(ServerFnError::new)
+    crate::server::disk::usage(root).reported_as(&format!(
+        "could not read the free space at {}",
+        root.display()
+    ))
 }

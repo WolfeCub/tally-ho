@@ -23,6 +23,19 @@ pub trait Rows<T> {
 
     /// Applies `edit` to one row, if it is still there.
     fn edit(&self, key: usize, edit: impl FnOnce(&mut T));
+
+    /// The setter every input on one row shares:
+    /// `edit(|row, v| row.name = v, ev.target().value())`.
+    ///
+    /// A `fn` pointer and not a closure, so the whole row gets one of these and
+    /// each input names the field it writes.
+    fn setter(&self, key: usize) -> impl Fn(fn(&mut T, String), String) + Copy + use<Self, T>
+    where
+        Self: Copy,
+    {
+        let rows = *self;
+        move |set, value| rows.edit(key, move |row| set(row, value))
+    }
 }
 
 impl<T: Keyed + Send + Sync + 'static> Rows<T> for RwSignal<Vec<T>> {

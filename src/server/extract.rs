@@ -23,9 +23,6 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use rig_agent::agent::{Agent, OutputMode};
-// `.agent()` comes from AgentClientExt, which is blanket-implemented for every
-// CompletionClient; the prelude brings in both.
-use rig_agent::prelude::*;
 use rig_core::OneOrMany;
 use rig_core::message::{ImageMediaType, Message, UserContent};
 use rig_core::providers::ollama;
@@ -35,7 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ask;
 use super::image::{self, ImageError};
-use super::parse;
+use crate::shared::parse;
 
 const DEFAULT_URL: &str = "http://localhost:11434";
 const DEFAULT_MODEL: &str = "gemma4:12b";
@@ -279,29 +276,10 @@ pub struct OllamaExtractor {
 impl OllamaExtractor {
     pub fn new(config: Config) -> Result<Self, ExtractError> {
         let client = ask::client(&config.url)?;
-        // Both models get the same residency policy.
-        let with_keep_alive = |params| ask::options(config.keep_alive.as_deref(), params);
+        let keep_alive = config.keep_alive.as_deref();
 
-        let agent = client
-            .agent(&config.model)
+        let agent = ask::agent(&client, &config.model, keep_alive, ask::no_thinking())
             .preamble(PROMPT)
-            // Greedy decoding. Measured on gemma4:12b: at the default
-            // temperature roughly a third of runs escaped into a string field
-            // (`"unit_price": ">{{4.99}}, "`), returned all nulls, or came back
-            // empty. At 0 the same prompt was stable across every run. The
-            // grammar constrains JSON *shape*, not the content of a string —
-            // sampling discipline is what keeps the content sane.
-            .temperature(0.0)
-            // Disable thinking. This is the single most important setting here.
-            // gemma4:12b is thinking-capable and Ollama enables it by default,
-            // which was catastrophic: measured on the test receipt, reasoning
-            // consumed the entire generation budget (3291 chars of `thinking`,
-            // 1500 tokens, 47s) and `content` came back *empty*, so extraction
-            // failed with what looked like a parse error. With thinking off the
-            // same request produced a fully correct receipt in 335 tokens and
-            // 10s. rig lifts `think` out of `additional_params` to the
-            // top-level Ollama field.
-            .additional_params(with_keep_alive(serde_json::json!({ "think": false })))
             // Maps to Ollama's `num_predict`.
             .max_tokens(MAX_OUTPUT_TOKENS)
             .output_schema_raw(ask::schema_of::<ExtractedReceipt>())
@@ -314,15 +292,13 @@ impl OllamaExtractor {
         // No preamble and no schema: it does one thing, and its Ollama template is
         // a bare prompt, so a system message has nowhere to go.
         let ocr = config.ocr_model.as_deref().map(|model| {
-            client
-                .agent(model)
-                .temperature(0.0)
+            // rig lifts `num_ctx` into Ollama's `options`.
+            let options = serde_json::json!({
+                "num_ctx": config.ocr_context,
+                "num_gpu": OCR_GPU_LAYERS,
+            });
+            ask::agent(&client, model, keep_alive, options)
                 .max_tokens(MAX_OUTPUT_TOKENS)
-                // rig lifts `num_ctx` into Ollama's `options`.
-                .additional_params(with_keep_alive(serde_json::json!({
-                    "num_ctx": config.ocr_context,
-                    "num_gpu": OCR_GPU_LAYERS,
-                })))
                 .build()
         });
 
@@ -410,46 +386,42 @@ pub struct NormalizedLineItem {
     pub total: Option<Decimal>,
 }
 
+/// Parses one field the model wrote, noting what it couldn't read rather than
+/// losing the whole receipt over it. The note names the field, so whoever
+/// reviews it knows where to look.
+fn parse_or_note<T>(
+    raw: &Option<String>,
+    label: &str,
+    parse: impl FnOnce(&str) -> Option<T>,
+    notes: &mut Vec<String>,
+) -> Option<T> {
+    let raw = raw.as_deref()?;
+    parse(raw).or_else(|| {
+        notes.push(format!("could not parse {label} {raw:?}"));
+        None
+    })
+}
+
 impl ExtractedReceipt {
     pub fn normalize(&self) -> Normalized {
-        let mut warnings = Vec::new();
+        let mut notes = Vec::new();
 
-        let mut money = |label: &str, raw: &Option<String>| -> Option<Decimal> {
-            let raw = raw.as_deref()?;
-            parse::money(raw).or_else(|| {
-                warnings.push(format!("could not parse {label} {raw:?}"));
-                None
-            })
-        };
-
-        let subtotal = money("subtotal", &self.subtotal);
-        let tax = money("tax", &self.tax);
-        let total = money("total", &self.total);
-
-        let purchased_on = self.purchased_on.as_deref().and_then(|raw| {
-            parse::date(raw).or_else(|| {
-                warnings.push(format!("could not parse date {raw:?}"));
-                None
-            })
-        });
+        let subtotal = parse_or_note(&self.subtotal, "subtotal", parse::money, &mut notes);
+        let tax = parse_or_note(&self.tax, "tax", parse::money, &mut notes);
+        let total = parse_or_note(&self.total, "total", parse::money, &mut notes);
+        let purchased_on = parse_or_note(&self.purchased_on, "date", parse::date, &mut notes);
 
         let line_items = self
             .line_items
             .iter()
             .enumerate()
             .map(|(i, item)| {
-                let mut amount = |label: &str, raw: &Option<String>| -> Option<Decimal> {
-                    let raw = raw.as_deref()?;
-                    parse::money(raw).or_else(|| {
-                        warnings.push(format!("item {i}: could not parse {label} {raw:?}"));
-                        None
-                    })
-                };
+                let mut money = |raw, label| parse_or_note(raw, label, parse::money, &mut notes);
                 NormalizedLineItem {
                     description: item.description.trim().to_string(),
-                    quantity: amount("quantity", &item.quantity),
-                    unit_price: amount("unit price", &item.unit_price),
-                    total: amount("total", &item.total),
+                    quantity: money(&item.quantity, &format!("item {i} quantity")),
+                    unit_price: money(&item.unit_price, &format!("item {i} unit price")),
+                    total: money(&item.total, &format!("item {i} total")),
                 }
             })
             .collect();
@@ -462,7 +434,7 @@ impl ExtractedReceipt {
             tax,
             total,
             line_items,
-            warnings,
+            warnings: notes,
         }
     }
 }

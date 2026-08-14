@@ -5,7 +5,7 @@ use leptos::web_sys::SubmitEvent;
 use uuid::Uuid;
 
 use crate::frontend::actions::{error_of, succeeded};
-use crate::frontend::components::{BUTTON, Bar, INPUT, Notice, PRIMARY, Tone, failed, loading};
+use crate::frontend::components::{BUTTON, Bar, INPUT, PRIMARY, error_notice, failed, loading};
 use crate::frontend::rows::{Keyed, Rows};
 use crate::frontend::text::bytes;
 use crate::shared::api::{disk_usage, list_people, save_people};
@@ -177,9 +177,7 @@ fn PeopleForm(
     };
 
     view! {
-        {move || {
-            error_of(save).map(|e| view! { <Notice tone=Tone::Bad>{e.to_string()}</Notice> })
-        }}
+        {move || error_notice(error_of(save))}
 
         <form class="flex flex-col gap-3" on:submit=submit>
             <ul class="flex flex-col gap-2">
@@ -224,9 +222,7 @@ fn PeopleForm(
 #[component]
 fn PersonRow(row: Row, rows: RwSignal<Vec<Row>>) -> impl IntoView {
     let key = row.key;
-    let edit = move |f: fn(&mut Row, String), value: String| {
-        rows.edit(key, move |row| f(row, value));
-    };
+    let edit = rows.setter(key);
 
     view! {
         <li class="flex gap-2 rounded-lg border border-edge p-3">

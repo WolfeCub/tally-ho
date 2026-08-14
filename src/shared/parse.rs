@@ -1,7 +1,9 @@
 //! Amounts and dates as a model, a card export or a human wrote them.
 //!
 //! Extraction, the statement CSV reader and the review screen all parse their
-//! input here.
+//! input here. Shared rather than server-side for that last one: the running
+//! total under the line items has to accept exactly what the save will, or it
+//! blanks out over an amount the server would have taken.
 
 use rust_decimal::Decimal;
 

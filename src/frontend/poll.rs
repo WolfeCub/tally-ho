@@ -4,6 +4,7 @@
 //! already returned, and nothing is pushed to the client — so the only way to
 //! find out it finished is to ask again.
 
+use std::future::Future;
 use std::time::Duration;
 
 use leptos::prelude::*;
@@ -66,21 +67,41 @@ pub fn poll_until_settled(
     poll_while(tick, move || working.get());
 }
 
-/// One receipt's extraction status, re-asked whenever `tick` moves.
+/// One question about `id`, re-asked whenever `tick` moves.
 ///
-/// `None` covers both "no receipt to watch yet" and "no answer has landed",
-/// which come to the same thing for a caller: not finished.
+/// `None` covers all three of "nothing to watch yet", "no answer has landed"
+/// and "the asking failed", which come to the same thing for a caller: not
+/// finished. A poll that can't reach the server is worth another tick, not an
+/// error on screen.
+pub fn keyed<T, Fut>(
+    id: impl Fn() -> Option<Uuid> + Send + Sync + 'static,
+    tick: RwSignal<u32>,
+    ask: impl Fn(Uuid) -> Fut + Send + Sync + 'static,
+) -> Resource<Option<T>>
+where
+    T: Clone + Send + Sync + serde::Serialize + serde::de::DeserializeOwned + 'static,
+    Fut: Future<Output = Result<T, ServerFnError>> + Send + 'static,
+{
+    Resource::new(
+        move || (id(), tick.get()),
+        move |(id, _)| {
+            // Called out here: the async block moves what it captures, and `ask` has
+            // to stay put for the next tick.
+            let pending = id.map(&ask);
+            async move {
+                match pending {
+                    Some(pending) => pending.await.ok(),
+                    None => None,
+                }
+            }
+        },
+    )
+}
+
+/// One receipt's extraction status, for as long as it keeps changing.
 pub fn extraction_status(
     id: impl Fn() -> Option<Uuid> + Send + Sync + 'static,
     tick: RwSignal<u32>,
 ) -> Resource<Option<ExtractionStatus>> {
-    Resource::new(
-        move || (id(), tick.get()),
-        |(id, _)| async move {
-            match id {
-                Some(id) => receipt_status(id).await.ok(),
-                None => None,
-            }
-        },
-    )
+    keyed(id, tick, receipt_status)
 }

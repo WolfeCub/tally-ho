@@ -2,8 +2,9 @@
 
 use leptos::prelude::*;
 
-use crate::frontend::components::{ReceiptRows, failed, loading};
+use crate::frontend::components::ReceiptRows;
 use crate::frontend::poll::poll_while;
+use crate::frontend::screen;
 use crate::shared::api::recent_receipts;
 
 #[component]
@@ -30,18 +31,10 @@ pub fn ReceiptListPage() -> impl IntoView {
 
     view! {
         <h1 class="mb-4 text-xl font-semibold">"Receipts"</h1>
-        // Transition rather than Suspense: polling refetches, and a fallback
-        // would blank the whole list every tick while a receipt is being read.
-        <Transition fallback=loading>
-            {move || Suspend::new(async move {
-                match receipts.await {
-                    Err(e) => failed(e),
-                    Ok(rows) if rows.is_empty() => {
-                        view! { <p class="text-muted">"No receipts yet."</p> }.into_any()
-                    }
-                    Ok(rows) => view! { <ReceiptRows rows /> }.into_any(),
-                }
-            })}
-        </Transition>
+        {screen::listing(
+            receipts,
+            "No receipts yet.",
+            |rows| view! { <ReceiptRows rows /> }.into_any(),
+        )}
     }
 }

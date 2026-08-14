@@ -1,11 +1,10 @@
 //! Photograph a receipt, upload it, and wait for the model to read it.
 
 use leptos::prelude::*;
-use leptos::web_sys::{FormData, SubmitEvent};
 
 use crate::frontend::actions::error_of;
 use crate::frontend::components::{
-    AS_BUTTON, BUTTON, CameraIcon, Spinner, StepBar, Verdict, form_element,
+    AS_BUTTON, BUTTON, CameraIcon, Spinner, StepBar, Verdict, upload_action, uploads_to,
 };
 use crate::frontend::poll::{extraction_status, poll_while};
 use crate::shared::api::upload_receipt;
@@ -66,8 +65,7 @@ impl Stage {
 
 #[component]
 pub fn CapturePage() -> impl IntoView {
-    // `_local` because FormData is not Send; the upload only ever runs client-side.
-    let upload = Action::new_local(|data: &FormData| upload_receipt(data.clone().into()));
+    let upload = upload_action(upload_receipt);
 
     // Whether the picker holds a photo. Reading `value` rather than `files`
     // keeps us to the web-sys features leptos already turns on.
@@ -109,14 +107,7 @@ pub fn CapturePage() -> impl IntoView {
 
         // Capped on desktop: a picker and one button have no business spanning
         // the full content width.
-        <form
-            class="flex flex-col gap-3 md:max-w-md"
-            on:submit=move |ev: SubmitEvent| {
-                ev.prevent_default();
-                let data = FormData::new_with_form(&form_element(&ev)).unwrap();
-                upload.dispatch_local(data);
-            }
-        >
+        <form class="flex flex-col gap-3 md:max-w-md" on:submit=uploads_to(upload)>
             // The whole panel is the tap target rather than the browser's own
             // file button, which is small and looks nothing like the app.
             <label class="flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-edge bg-surface px-4 py-10 text-center active:bg-edge">

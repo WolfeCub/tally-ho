@@ -6,7 +6,7 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::frontend::actions::error_of;
-use crate::frontend::components::{INPUT, Spinner};
+use crate::frontend::components::{INPUT, Spinner, upload_action};
 use crate::frontend::money::{money, shares_line};
 use crate::frontend::text::{merchant, plural, total_or_why};
 use crate::shared::api::upload_receipt;
@@ -347,7 +347,7 @@ fn Photograph(
     charge_id: Uuid,
     resolve: impl Fn(Uuid, Resolve) + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
-    let upload = Action::new_local(|data: &FormData| upload_receipt(data.clone().into()));
+    let upload = upload_action(upload_receipt);
 
     Effect::new(move |_| {
         if let Some(Ok(receipt_id)) = upload.value().get() {

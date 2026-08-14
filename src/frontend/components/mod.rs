@@ -10,9 +10,9 @@ mod receipt_rows;
 mod steps;
 
 pub use bar::Bar;
-pub use form::{LabeledInput, confirm, field, form_element};
+pub use form::{LabeledInput, confirm, field, form_element, upload_action, uploads_to};
 pub use icons::{CameraIcon, Spinner, Verdict};
-pub use notice::{Notice, Tone, failed, loading};
+pub use notice::{Notice, Tone, error_notice, failed, loading};
 pub use photo::ReceiptPhoto;
 pub use receipt_rows::ReceiptRows;
 pub use steps::StepBar;

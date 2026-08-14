@@ -9,7 +9,7 @@
 
 use rust_decimal::Decimal;
 
-use crate::server::parse;
+use crate::shared::parse;
 
 /// Some exports open with a line or two of account details before the header.
 const HEADER_SEARCH_ROWS: usize = 10;

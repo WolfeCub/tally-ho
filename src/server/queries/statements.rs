@@ -1,7 +1,7 @@
 //! Importing a statement, reading one back with its matches, and the summaries
 //! the list screen shows. The charges are next door in [`super::charges`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use uuid::Uuid;
 
@@ -20,16 +20,13 @@ pub async fn list(db: &mut toasty::Db) -> toasty::Result<Vec<dto::StatementSumma
         .exec(db)
         .await?;
 
+    // Nothing to hang charges off, so don't read the charge table at all.
     if statements.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Every charge in one query and grouped here, rather than a query per
-    // statement — same reason as [`super::receipts::with_items`].
-    let mut charges: HashMap<Uuid, Vec<models::Charge>> = HashMap::new();
-    for charge in models::Charge::all().exec(db).await? {
-        charges.entry(charge.statement_id).or_default().push(charge);
-    }
+    let all_charges = models::Charge::all().exec(db).await?;
+    let mut charges = super::group_by(all_charges, |charge| charge.statement_id);
 
     Ok(statements
         .into_iter()
@@ -116,19 +113,21 @@ pub async fn load(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<dto::Statemen
     let people = super::people::list(db).await?;
     let free = pool(db, statement.begins_on, statement.ends_on).await?;
 
+    // A matched receipt is deliberately absent from `free`, and may be outside
+    // the window anyway if it was attached by hand — so they're fetched here,
+    // all at once. One query each would be two per charge, on a screen that
+    // reloads the whole statement after every decision.
+    let matched_receipts =
+        super::receipts::by_id(db, rows.iter().filter_map(|row| row.receipt_id)).await?;
+
     let mut charges = Vec::with_capacity(rows.len());
     for row in &rows {
-        // A matched receipt is deliberately absent from `free`, and may be
-        // outside the window anyway if it was attached by hand.
-        let matched = match row.receipt_id {
-            Some(receipt_id) => super::receipts::load(db, receipt_id).await?,
-            None => None,
-        };
+        let matched = row.receipt_id.and_then(|id| matched_receipts.get(&id));
 
         let (resolution, split) = match matched {
             Some(receipt) => {
                 let split = split_charge(row.amount, currency, &receipt.line_items, &people);
-                let matched = to_matched(&receipt);
+                let matched = to_matched(receipt);
                 let resolution = if row.confirmed {
                     dto::Resolution::Confirmed(matched)
                 } else {

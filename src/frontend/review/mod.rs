@@ -12,11 +12,12 @@ use uuid::Uuid;
 
 use crate::frontend::actions::{error_of, first_error, succeeded};
 use crate::frontend::components::{
-    BUTTON, DANGER, LabeledInput, Notice, PRIMARY, ReceiptPhoto, Spinner, Tone, confirm, failed,
-    field, form_element, loading,
+    BUTTON, DANGER, LabeledInput, Notice, PRIMARY, ReceiptPhoto, Spinner, Tone, confirm,
+    error_notice, field, form_element,
 };
 use crate::frontend::poll::{extraction_status, poll_until_settled};
 use crate::frontend::route::id_param;
+use crate::frontend::screen;
 use crate::frontend::text::total_or_why;
 use crate::shared::api::{
     delete_receipt, get_receipt, list_people, mark_reviewed, retry_extraction, save_receipt,
@@ -46,11 +47,10 @@ pub fn ReviewPage() -> impl IntoView {
 
     // Both in one resource: without the people list the assignment dropdowns
     // would quietly come up empty, which reads as "nobody to charge this to".
-    let receipt = Resource::new(id, |id| async move {
-        let Some(id) = id else { return Ok(None) };
+    let receipt = screen::for_id(id, |id| async move {
         let receipt = get_receipt(id).await?;
         let people = list_people().await?;
-        Ok::<_, ServerFnError>(Some((receipt, people)))
+        Ok((receipt, people))
     });
 
     // A receipt can still be extracting when this screen opens — a fresh upload
@@ -82,19 +82,13 @@ pub fn ReviewPage() -> impl IntoView {
                     }
                 })
         }}
-        // Transition rather than Suspense: saving refetches, and a fallback
-        // would blank the whole screen every time.
-        <Transition fallback=loading>
-            {move || Suspend::new(async move {
-                match receipt.await {
-                    Err(e) => failed(e),
-                    Ok(None) => failed("Not a valid receipt id."),
-                    Ok(Some((r, people))) => {
-                        view! { <ReviewForm receipt=r people status reload /> }.into_any()
-                    }
-                }
-            })}
-        </Transition>
+        {screen::detail(
+            receipt,
+            "Not a valid receipt id.",
+            move |(r, people)| {
+                view! { <ReviewForm receipt=r people status reload /> }.into_any()
+            },
+        )}
     }
 }
 
@@ -194,7 +188,7 @@ fn ReviewForm(
             <div class="min-w-0">
                 <ExtractionNotice receipt=receipt.clone() status retry />
 
-                {move || error_text().map(|e| view! { <Notice tone=Tone::Bad>{e}</Notice> })}
+                {move || error_notice(error_text())}
 
                 // One switch for every field and button below it: a disabled
                 // fieldset disables what it contains. `contents` so it lays out

@@ -10,12 +10,11 @@ use crate::shared::dto;
 // Server-only, so these are behind a `cfg` rather than plain imports.
 #[cfg(feature = "ssr")]
 use {
-    super::support::{db, one_file},
+    super::support::{Reported as _, db, one_file},
     crate::server::job,
-    crate::server::parse,
     crate::server::queries::receipts,
     crate::server::state::AppState,
-    anyhow::Context as _,
+    crate::shared::parse,
 };
 
 /// Stores an uploaded photo, creates the receipt row, and kicks off extraction.
@@ -36,14 +35,12 @@ pub async fn upload_receipt(data: MultipartData) -> Result<Uuid, ServerFnError> 
         .store
         .write_upload(&bytes, today)
         .await
-        .context("could not store image")
-        .map_err(ServerFnError::new)?;
+        .reported_as("could not store image")?;
 
     let mut db = state.db.clone();
     let id = receipts::create(&mut db, &image_path, today)
         .await
-        .context("could not create receipt")
-        .map_err(ServerFnError::new)?;
+        .reported_as("could not create receipt")?;
 
     job::spawn(state.clone(), id);
 
@@ -55,8 +52,7 @@ pub async fn upload_receipt(data: MultipartData) -> Result<Uuid, ServerFnError> 
 pub async fn receipt_status(id: Uuid) -> Result<dto::ExtractionStatus, ServerFnError> {
     receipts::status(&mut db(), id)
         .await
-        .context("no such receipt")
-        .map_err(ServerFnError::new)
+        .reported_as("no such receipt")
 }
 
 /// Re-runs extraction on a receipt the model failed to read.
@@ -67,9 +63,7 @@ pub async fn retry_extraction(id: Uuid) -> Result<(), ServerFnError> {
 
     // Reset before spawning, so the caller's reload sees a receipt that's
     // working again rather than the failure it just retried.
-    receipts::reset_for_retry(&mut db, id)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    receipts::reset_for_retry(&mut db, id).await.reported()?;
 
     job::spawn(state, id);
     Ok(())
@@ -80,8 +74,7 @@ pub async fn retry_extraction(id: Uuid) -> Result<(), ServerFnError> {
 pub async fn recent_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, ServerFnError> {
     receipts::recent(&mut db(), limit)
         .await
-        .context("could not load receipts")
-        .map_err(ServerFnError::new)
+        .reported_as("could not load receipts")
 }
 
 /// Full receipt with line items, for the review screen.
@@ -101,8 +94,7 @@ pub async fn save_receipt(save: dto::ReceiptSave) -> Result<dto::Receipt, Server
 
     receipts::save(&mut db, id, parsed)
         .await
-        .context("could not save receipt")
-        .map_err(ServerFnError::new)?;
+        .reported_as("could not save receipt")?;
 
     load_receipt(&mut db, id).await
 }
@@ -170,8 +162,7 @@ pub async fn suggest_assignments(id: Uuid) -> Result<dto::Receipt, ServerFnError
 
     crate::server::assign::suggest(&mut db, &*state.assigner, id)
         .await
-        .context("could not guess who owes what")
-        .map_err(ServerFnError::new)?;
+        .reported_as("could not guess who owes what")?;
 
     load_receipt(&mut db, id).await
 }
@@ -181,9 +172,7 @@ pub async fn suggest_assignments(id: Uuid) -> Result<dto::Receipt, ServerFnError
 pub async fn mark_reviewed(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
     let mut db = db();
 
-    receipts::mark_reviewed(&mut db, id)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    receipts::mark_reviewed(&mut db, id).await.reported()?;
 
     load_receipt(&mut db, id).await
 }
@@ -201,8 +190,7 @@ pub async fn delete_receipt(id: Uuid) -> Result<(), ServerFnError> {
 
     let image_path = receipts::delete(&mut db, id)
         .await
-        .context("could not delete receipt")
-        .map_err(ServerFnError::new)?;
+        .reported_as("could not delete receipt")?;
 
     // After the rows, and only a warning: the filesystem isn't part of the
     // transaction and the receipt is already gone. An orphaned image costs disk;
@@ -223,7 +211,6 @@ pub async fn delete_receipt(id: Uuid) -> Result<(), ServerFnError> {
 async fn load_receipt(db: &mut toasty::Db, id: Uuid) -> Result<dto::Receipt, ServerFnError> {
     receipts::load(db, id)
         .await
-        .context("could not load receipt")
-        .map_err(ServerFnError::new)?
+        .reported_as("could not load receipt")?
         .ok_or_else(|| ServerFnError::new("no such receipt"))
 }

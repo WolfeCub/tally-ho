@@ -15,7 +15,6 @@ pub mod job;
 pub mod mappers;
 pub mod matching;
 pub mod models;
-pub mod parse;
 pub mod queries;
 pub mod state;
 pub mod statement_csv;

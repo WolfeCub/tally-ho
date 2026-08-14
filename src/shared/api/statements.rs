@@ -9,9 +9,8 @@ use crate::shared::dto;
 // Server-only, so these are behind a `cfg` rather than plain imports.
 #[cfg(feature = "ssr")]
 use {
-    super::support::{db, one_file},
+    super::support::{Reported as _, db, one_file},
     crate::server::queries::statements,
-    anyhow::Context as _,
 };
 
 /// Reads an uploaded statement CSV, writes its charges, and proposes a receipt
@@ -35,13 +34,12 @@ pub async fn import_statement(data: MultipartData) -> Result<dto::Imported, Serv
     // Only ever shown, so an unnamed upload gets a name rather than an error.
     let label = label.unwrap_or_else(|| "statement.csv".to_string());
 
-    let parsed = statement_csv::charges(&bytes).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let parsed = statement_csv::charges(&bytes).reported()?;
 
     let mut db = state.db.clone();
     let id = statements::import(&mut db, &label, &state.currency, &parsed)
         .await
-        .context("could not import the statement")
-        .map_err(ServerFnError::new)?;
+        .reported_as("could not import the statement")?;
 
     Ok(dto::Imported {
         id,
@@ -60,8 +58,7 @@ pub async fn import_statement(data: MultipartData) -> Result<dto::Imported, Serv
 pub async fn list_statements() -> Result<Vec<dto::StatementSummary>, ServerFnError> {
     statements::list(&mut db())
         .await
-        .context("could not load statements")
-        .map_err(ServerFnError::new)
+        .reported_as("could not load statements")
 }
 
 /// One statement to reconcile: every charge, what accounts for it, and what it
@@ -70,8 +67,7 @@ pub async fn list_statements() -> Result<Vec<dto::StatementSummary>, ServerFnErr
 pub async fn get_statement(id: Uuid) -> Result<dto::Statement, ServerFnError> {
     statements::load(&mut db(), id)
         .await
-        .context("could not load the statement")
-        .map_err(ServerFnError::new)
+        .reported_as("could not load the statement")
 }
 
 /// Poll target while a receipt photographed onto this statement is being read.
@@ -79,8 +75,7 @@ pub async fn get_statement(id: Uuid) -> Result<dto::Statement, ServerFnError> {
 pub async fn statement_reading(id: Uuid) -> Result<bool, ServerFnError> {
     statements::reading(&mut db(), id)
         .await
-        .context("could not check the statement")
-        .map_err(ServerFnError::new)
+        .reported_as("could not check the statement")
 }
 
 /// Records what a human decided about one charge.
@@ -92,9 +87,7 @@ pub async fn statement_reading(id: Uuid) -> Result<bool, ServerFnError> {
 pub async fn resolve_charge(charge_id: Uuid, how: dto::Resolve) -> Result<(), ServerFnError> {
     use crate::server::queries::charges;
 
-    charges::resolve(&mut db(), charge_id, how)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
+    charges::resolve(&mut db(), charge_id, how).await.reported()
 }
 
 /// Receipts nothing accounts for yet, for picking one by hand.
@@ -104,8 +97,7 @@ pub async fn spare_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, Se
 
     receipts::spare(&mut db(), limit)
         .await
-        .context("could not load receipts")
-        .map_err(ServerFnError::new)
+        .reported_as("could not load receipts")
 }
 
 /// Throws away a statement and its charges. The receipts stay.
@@ -113,6 +105,5 @@ pub async fn spare_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, Se
 pub async fn delete_statement(id: Uuid) -> Result<(), ServerFnError> {
     statements::delete(&mut db(), id)
         .await
-        .context("could not delete the statement")
-        .map_err(ServerFnError::new)
+        .reported_as("could not delete the statement")
 }

@@ -14,6 +14,7 @@ use crate::frontend::money::money;
 use crate::frontend::rows::{Keyed, Rows};
 use crate::frontend::text::plural;
 use crate::shared::dto::{LineItem, Person};
+use crate::shared::parse;
 
 /// A button that sits in a row rather than under one. Not the shared BUTTON:
 /// its padding would make these taller than the inputs they line up with.
@@ -61,11 +62,14 @@ impl Row {
 
 /// What the items add up to as typed, or `None` while one of them isn't a
 /// number yet.
+///
+/// Read with the parser the save uses, so the sum accepts whatever the server
+/// will: type "$4.99" and this agrees rather than going blank at you.
 fn typed_sum(rows: &[Row]) -> Option<Decimal> {
     rows.iter()
         .map(|row| match row.total.trim() {
             "" => Some(Decimal::ZERO),
-            typed => typed.parse().ok(),
+            typed => parse::money(typed),
         })
         .sum()
 }
@@ -199,9 +203,7 @@ fn ItemRow(row: Row, rows: RwSignal<Vec<Row>>, people: StoredValue<Vec<Person>>)
     let person_id = row.person_id;
     let has_people = people.with_value(|people| !people.is_empty());
 
-    let edit = move |f: fn(&mut Row, String), value: String| {
-        rows.edit(key, move |row| f(row, value));
-    };
+    let edit = rows.setter(key);
 
     // This row's own, so typing in another one doesn't disturb it. Cleared when
     // you pick somebody, which the save then agrees with server-side.

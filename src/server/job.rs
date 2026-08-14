@@ -73,7 +73,9 @@ async fn run(state: &AppState, receipt_id: Uuid) -> Result<(), JobError> {
         total: n.total,
         extraction_error: note,
         model_used: Some(extraction.model.clone()),
-        raw_response: Some(toasty::Json(serde_json::from_str(&extraction.structuring_raw)?)),
+        raw_response: Some(toasty::Json(serde_json::from_str(
+            &extraction.structuring_raw
+        )?)),
     })
     .exec(&mut db)
     .await?;

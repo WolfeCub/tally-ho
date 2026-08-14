@@ -23,6 +23,18 @@ pub fn failed(why: impl ToString) -> AnyView {
     view! { <p class="text-danger">{why.to_string()}</p> }.into_any()
 }
 
+/// What a screen says at the top when something it tried didn't work.
+///
+/// Takes the `Option` rather than the action so it reads the same whether the
+/// message came from one [`error_of`](crate::frontend::actions::error_of) or
+/// from [`first_error`](crate::frontend::actions::first_error) over several.
+pub fn error_notice(why: Option<impl ToString>) -> Option<AnyView> {
+    // To the string before the view, or the children closure has to carry the
+    // error itself and nothing says it's `Send`.
+    let why = why?.to_string();
+    Some(view! { <Notice tone=Tone::Bad>{why}</Notice> }.into_any())
+}
+
 #[component]
 pub fn Notice(tone: Tone, children: Children) -> impl IntoView {
     let class = match tone {

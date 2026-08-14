@@ -4,17 +4,17 @@
 mod charge;
 
 use leptos::prelude::*;
-use leptos::web_sys::{FormData, SubmitEvent};
 use uuid::Uuid;
 
 use crate::frontend::actions::{error_of, succeeded};
 use crate::frontend::components::{
-    AS_BUTTON, BUTTON, Bar, DANGER, INPUT, Notice, PRIMARY, ROW, Tone, confirm, failed,
-    form_element, loading,
+    AS_BUTTON, BUTTON, Bar, DANGER, INPUT, PRIMARY, ROW, confirm, error_notice, upload_action,
+    uploads_to,
 };
 use crate::frontend::money::{money, money_total, shares_line};
-use crate::frontend::poll::poll_until_settled;
+use crate::frontend::poll::{self, poll_until_settled};
 use crate::frontend::route::id_param;
+use crate::frontend::screen;
 use crate::frontend::text::plural;
 use crate::shared::api::{
     delete_statement, get_statement, import_statement, list_statements, resolve_charge,
@@ -26,8 +26,7 @@ use charge::{ChargeRow, Shared};
 #[component]
 pub fn StatementsPage() -> impl IntoView {
     let statements = Resource::new(|| (), |_| list_statements());
-    // `_local` because FormData is not Send; the upload only ever runs client-side.
-    let import = Action::new_local(|data: &FormData| import_statement(data.clone().into()));
+    let import = upload_action(import_statement);
     let imported = move || import.value().get().and_then(|r| r.ok());
     let chosen = RwSignal::new(false);
 
@@ -43,14 +42,7 @@ pub fn StatementsPage() -> impl IntoView {
             "Upload the CSV your card exports. Every charge on it then gets a receipt, or a reason it hasn't got one."
         </p>
 
-        <form
-            class="mb-4 flex flex-col gap-3 md:max-w-md"
-            on:submit=move |ev: SubmitEvent| {
-                ev.prevent_default();
-                let data = FormData::new_with_form(&form_element(&ev)).unwrap();
-                import.dispatch_local(data);
-            }
-        >
+        <form class="mb-4 flex flex-col gap-3 md:max-w-md" on:submit=uploads_to(import)>
             <label class="flex flex-col gap-1">
                 <span class="text-sm text-muted">"Statement CSV"</span>
                 <input
@@ -70,23 +62,15 @@ pub fn StatementsPage() -> impl IntoView {
             </button>
         </form>
 
-        {move || {
-            error_of(import).map(|e| view! { <Notice tone=Tone::Bad>{e.to_string()}</Notice> })
-        }}
+        {move || error_notice(error_of(import))}
         {move || imported().map(|imported| view! { <ImportedCard imported /> })}
 
         <h2 class="mt-8 mb-2 font-semibold">"Imported"</h2>
-        <Transition fallback=loading>
-            {move || Suspend::new(async move {
-                match statements.await {
-                    Err(e) => failed(e),
-                    Ok(rows) if rows.is_empty() => {
-                        view! { <p class="text-muted">"No statements yet."</p> }.into_any()
-                    }
-                    Ok(rows) => view! { <StatementRows rows /> }.into_any(),
-                }
-            })}
-        </Transition>
+        {screen::listing(
+            statements,
+            "No statements yet.",
+            |rows| view! { <StatementRows rows /> }.into_any(),
+        )}
     }
 }
 
@@ -171,11 +155,10 @@ pub fn ReconcilePage() -> impl IntoView {
 
     // Both in one resource: the picker offers the receipts nothing accounts for,
     // and a stale list would offer one that was just used.
-    let data = Resource::new(id, |id| async move {
-        let Some(id) = id else { return Ok(None) };
+    let data = screen::for_id(id, |id| async move {
         let statement = get_statement(id).await?;
         let spare = spare_receipts(100).await?;
-        Ok::<_, ServerFnError>(Some((statement, spare)))
+        Ok((statement, spare))
     });
 
     // A receipt photographed here is attached while the model is still reading
@@ -183,15 +166,7 @@ pub fn ReconcilePage() -> impl IntoView {
     // question is polled: re-asking for the statement rebuilds every row on a
     // timer, which resets the "hide what's done" box while you're using it.
     let tick = RwSignal::new(0u32);
-    let reading = Resource::new(
-        move || (id(), tick.get()),
-        |(id, _)| async move {
-            match id {
-                Some(id) => statement_reading(id).await.ok(),
-                None => None,
-            }
-        },
-    );
+    let reading = poll::keyed(id, tick, statement_reading);
     poll_until_settled(
         tick,
         move || reading.get().flatten(),
@@ -208,24 +183,13 @@ pub fn ReconcilePage() -> impl IntoView {
     // Out here so it survives those reloads.
     let hide_done = RwSignal::new(false);
 
-    view! {
-        // Transition rather than Suspense: every decision refetches, and a
-        // fallback would blank the statement each time.
-        <Transition fallback=loading>
-            {move || Suspend::new(async move {
-                match data.await {
-                    Err(e) => failed(e),
-                    Ok(None) => failed("Not a valid statement id."),
-                    Ok(Some((statement, spare))) => {
-                        view! {
-                            <StatementView statement spare reload hide_done />
-                        }
-                            .into_any()
-                    }
-                }
-            })}
-        </Transition>
-    }
+    screen::detail(
+        data,
+        "Not a valid statement id.",
+        move |(statement, spare)| {
+            view! { <StatementView statement spare reload hide_done /> }.into_any()
+        },
+    )
 }
 
 #[component]
@@ -267,7 +231,7 @@ fn StatementView(
     view! {
         <Summary statement />
 
-        {move || error_of(resolve).map(|e| view! { <Notice tone=Tone::Bad>{e.to_string()}</Notice> })}
+        {move || error_notice(error_of(resolve))}
 
         <label class="mb-2 flex items-center gap-2 text-sm text-muted">
             // `prop:` and not the attribute: the attribute is only the starting
@@ -328,47 +292,45 @@ fn Summary(statement: Statement) -> impl IntoView {
     let owed = shares_line(&statement.totals(), &statement.people, &currency);
 
     view! {
-            <div class="mb-4 rounded-lg border border-edge bg-surface p-4">
-                <div class="sm:flex sm:items-start sm:justify-between sm:gap-4">
-                    <div class="min-w-0">
-                        <p class="truncate text-sm text-muted">
-                            {statement.label.clone()} " · " {statement.begins_on.to_string()} " – "
-                            {statement.ends_on.to_string()}
-                        </p>
-                        <p class="text-3xl font-semibold tabular-nums">
-                            {money_total(statement.total(), &currency)}
-                        </p>
-                        <p class="mt-1 tabular-nums">{owed}</p>
-                    </div>
-                    // `download` is required: leptos_router intercepts same-origin
-                    // anchors without it and navigates the SPA to the URL, which
-                    // renders the not-found page.
-                    <a
-                        href=format!("/statement/{}/export.csv", statement.id)
-                        download
-                        class=format!("{BUTTON} {AS_BUTTON} mt-3 shrink-0 sm:mt-0")
-                    >
-                        "Export CSV"
-                    </a>
+        <div class="mb-4 rounded-lg border border-edge bg-surface p-4">
+            <div class="sm:flex sm:items-start sm:justify-between sm:gap-4">
+                <div class="min-w-0">
+                    <p class="truncate text-sm text-muted">
+                        {statement.label.clone()} " · " {statement.begins_on.to_string()} " – "
+                        {statement.ends_on.to_string()}
+                    </p>
+                    <p class="text-3xl font-semibold tabular-nums">
+                        {money_total(statement.total(), &currency)}
+                    </p>
+                    <p class="mt-1 tabular-nums">{owed}</p>
                 </div>
-
-                <p class="mt-3 text-sm text-muted">
-                    {format!("{done} of {count} accounted for")}
-                </p>
-    <Bar percent />
-
-                {(left > 0)
-                    .then(|| {
-                        view! {
-                            <p class="mt-2 text-sm text-danger">
-                                {format!(
-                                    "{} still to go, so the figures above are {} short of the statement.",
-                                    plural(left, "charge"),
-                                    money(short, &currency),
-                                )}
-                            </p>
-                        }
-                    })}
+                // `download` is required: leptos_router intercepts same-origin
+                // anchors without it and navigates the SPA to the URL, which
+                // renders the not-found page.
+                <a
+                    href=format!("/statement/{}/export.csv", statement.id)
+                    download
+                    class=format!("{BUTTON} {AS_BUTTON} mt-3 shrink-0 sm:mt-0")
+                >
+                    "Export CSV"
+                </a>
             </div>
-        }
+
+            <p class="mt-3 text-sm text-muted">{format!("{done} of {count} accounted for")}</p>
+            <Bar percent />
+
+            {(left > 0)
+                .then(|| {
+                    view! {
+                        <p class="mt-2 text-sm text-danger">
+                            {format!(
+                                "{} still to go, so the figures above are {} short of the statement.",
+                                plural(left, "charge"),
+                                money(short, &currency),
+                            )}
+                        </p>
+                    }
+                })}
+        </div>
+    }
 }

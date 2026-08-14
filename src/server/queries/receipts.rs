@@ -5,26 +5,19 @@ use anyhow::Context as _;
 use crate::server::{mappers, models};
 use crate::shared::dto;
 
-/// Receipts with their line items, in the order they came in.
-///
-/// One query for the lot, grouped in memory. toasty has no join or `IN` loading,
-/// so the obvious way to write this is a query per receipt — which the list
-/// screen would then run a hundred of, every time it polls while something is
-/// being read. Reading the line-item table whole is a few thousand rows against
-/// a local SQLite file, and it doesn't grow with the size of the batch.
+/// Receipts with their line items, in the order they came in. One query for the
+/// lot, grouped by [`super::group_by`].
 async fn with_items(
     db: &mut toasty::Db,
     receipts: Vec<models::Receipt>,
 ) -> toasty::Result<Vec<(models::Receipt, Vec<models::LineItem>)>> {
+    // Nothing to hang items off, so don't read the line-item table at all.
     if receipts.is_empty() {
         return Ok(Vec::new());
     }
 
-    let mut items: std::collections::HashMap<uuid::Uuid, Vec<models::LineItem>> =
-        std::collections::HashMap::new();
-    for item in models::LineItem::all().exec(db).await? {
-        items.entry(item.receipt_id).or_default().push(item);
-    }
+    let items = models::LineItem::all().exec(db).await?;
+    let mut items = super::group_by(items, |item| item.receipt_id);
 
     Ok(receipts
         .into_iter()
@@ -46,6 +39,33 @@ pub async fn load(db: &mut toasty::Db, id: uuid::Uuid) -> toasty::Result<Option<
     };
     let items = receipt.line_items().exec(db).await?;
     Ok(Some(mappers::to_dto_receipt(&receipt, &items)))
+}
+
+/// The named receipts with their line items, keyed by id.
+///
+/// One sweep for the lot rather than a [`load`] each: toasty has no `IN`, and
+/// the caller is holding a whole statement's worth of ids.
+pub(super) async fn by_id(
+    db: &mut toasty::Db,
+    ids: impl IntoIterator<Item = uuid::Uuid>,
+) -> toasty::Result<std::collections::HashMap<uuid::Uuid, dto::Receipt>> {
+    let ids: std::collections::HashSet<_> = ids.into_iter().collect();
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let wanted = models::Receipt::all()
+        .exec(db)
+        .await?
+        .into_iter()
+        .filter(|receipt| ids.contains(&receipt.id))
+        .collect();
+
+    Ok(with_items(db, wanted)
+        .await?
+        .iter()
+        .map(|(receipt, items)| (receipt.id, mappers::to_dto_receipt(receipt, items)))
+        .collect())
 }
 
 /// How far a receipt has got, for the client's poll.
