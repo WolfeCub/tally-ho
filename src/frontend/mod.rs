@@ -19,7 +19,7 @@ mod settings;
 mod text;
 
 use leptos::prelude::*;
-use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
+use leptos_meta::{HashedStylesheet, MetaTags, Title, provide_meta_context};
 use leptos_router::components::{A, Route, Router, Routes};
 use leptos_router::path;
 
@@ -52,6 +52,10 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                 />
                 <link rel="icon" type="image/png" href="/favicon.png" />
                 <AutoReload options=options.clone() />
+                // Both of these name the bundle by its content hash, so a new
+                // release is a new filename and a phone can't serve the old one
+                // out of its cache.
+                <HashedStylesheet options=options.clone() id="leptos" />
                 <HydrationScripts options />
                 <MetaTags />
             </head>
@@ -67,7 +71,6 @@ pub fn App() -> impl IntoView {
     provide_meta_context();
 
     view! {
-        <Stylesheet id="leptos" href="/pkg/tally_ho.css" />
         <Title text="tally-ho" />
 
         <Router>

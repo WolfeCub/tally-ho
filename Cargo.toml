@@ -108,4 +108,5 @@ bin-features = ["ssr"]
 lib-features = ["hydrate"]
 lib-profile-release = "wasm-release"
 assets-dir = "public"
+hash-files = true
 tailwind-input-file = "style/tailwind.css"

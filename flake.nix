@@ -111,12 +111,16 @@
               mkdir -p $out/bin $out/share/tally-ho
               cp -r target/site toasty $out/share/tally-ho/
               install -Dm755 target/release/tally-ho $out/bin/tally-ho
+              # Leptos looks for the asset hashes next to the binary, and
+              # wrapProgram leaves the real one here too.
+              install -Dm644 target/release/hash.txt $out/bin/hash.txt
 
               # These default to cwd-relative paths, which breaks once installed.
               wrapProgram $out/bin/tally-ho \
                 --set-default LEPTOS_SITE_ROOT $out/share/tally-ho/site \
                 --set-default LEPTOS_ENV PROD \
-                --set-default MIGRATIONS_DIR $out/share/tally-ho/toasty
+                --set-default MIGRATIONS_DIR $out/share/tally-ho/toasty \
+                --set-default LEPTOS_HASH_FILES true
             '';
 
             meta.mainProgram = "tally-ho";
