@@ -22,6 +22,8 @@ pub fn statement_to_csv(statement: &Statement) -> String {
             Resolution::Proposed(m) => (m.merchant.as_str(), "needs confirming"),
             Resolution::Confirmed(m) => (m.merchant.as_str(), "matched"),
             Resolution::NoReceipt { .. } => ("", "no receipt"),
+            // The purchase it came off, rather than a receipt of its own.
+            Resolution::Refund(r) => (r.description.as_str(), "refund"),
         };
         out.push_str(&format!(
             "{},{},{},{},{status}",
@@ -73,8 +75,8 @@ fn text(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::dto::Resolution::{Confirmed, NoReceipt, Proposed, Unresolved};
-    use crate::shared::testing::{charge, matched, statement};
+    use crate::shared::dto::Resolution::{Confirmed, NoReceipt, Proposed, Refund, Unresolved};
+    use crate::shared::testing::{charge, matched, refunded, statement};
 
     #[test]
     fn settled_rows_are_filled_in_and_the_rest_left_blank() {
@@ -100,6 +102,23 @@ mod tests {
             "a proposal is named but not counted"
         );
         assert_eq!(lines[4], "2026-07-04,MYSTERY,5.00,,unresolved,,");
+    }
+
+    /// A refund is accounted for by the purchase it came off rather than a
+    /// receipt of its own, so that's what goes in the column — and its figures
+    /// are filled in like any other settled row, negative so they come off.
+    #[test]
+    fn a_refund_names_the_purchase_it_came_off() {
+        let csv = statement_to_csv(&statement(vec![charge(
+            "COSTCO RETURN",
+            "-13.81",
+            Refund(refunded("COSTCO WHSE #1050", "35.36")),
+        )]));
+
+        assert_eq!(
+            csv.lines().nth(1).unwrap(),
+            "2026-07-04,COSTCO RETURN,-13.81,COSTCO WHSE #1050,refund,-6.90,-6.91"
+        );
     }
 
     /// Descriptions come off a bank file and merchants out of a model reading an

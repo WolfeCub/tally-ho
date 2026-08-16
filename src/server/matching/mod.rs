@@ -6,7 +6,8 @@
 //! Recognising the merchant counts for a receipt; not recognising it counts for
 //! nothing, and never against.
 
-mod merchant;
+// Also used to pair a refund with the purchase it came off.
+pub(super) mod merchant;
 
 use std::cmp::Reverse;
 

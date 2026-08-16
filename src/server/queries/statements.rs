@@ -1,17 +1,25 @@
 //! Importing a statement, reading one back with its matches, and the summaries
 //! the list screen shows. The charges are next door in [`super::charges`].
 
-use std::collections::HashSet;
+use std::cmp::Reverse;
+use std::collections::{HashMap, HashSet};
 
+use rust_decimal::Decimal;
 use uuid::Uuid;
 
+use crate::server::matching::merchant;
 use crate::server::{mappers, matching, models, statement_csv};
 use crate::shared::dto;
 use crate::shared::reconcile::{charge_to, split_charge};
+use crate::shared::refund::split_refund;
 
 /// How far either side of a statement's own dates to look for receipts. Wider
 /// than the match window, so a receipt right at the edge still gets offered.
 const SLACK: i32 = 7;
+
+/// How far back a refund may reach for the purchase it came off. Return windows
+/// run to a couple of months and the refund posts after that.
+const REACH: i32 = 180;
 
 /// Every statement imported, newest first.
 pub async fn list(db: &mut toasty::Db) -> toasty::Result<Vec<dto::StatementSummary>> {
@@ -113,54 +121,106 @@ pub async fn load(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<dto::Statemen
     let people = super::people::list(db).await?;
     let free = pool(db, statement.begins_on, statement.ends_on).await?;
 
+    // A refund points at the purchase it came off, which is usually on the
+    // statement before this one — so the whole card is needed, both to look that
+    // purchase up and to find the refunds pointing back at these charges.
+    let card = super::charges::by_id(db).await?;
+
     // A matched receipt is deliberately absent from `free`, and may be outside
     // the window anyway if it was attached by hand — so they're fetched here,
     // all at once. One query each would be two per charge, on a screen that
-    // reloads the whole statement after every decision.
-    let matched_receipts =
-        super::receipts::by_id(db, rows.iter().filter_map(|row| row.receipt_id)).await?;
+    // reloads the whole statement after every decision. The purchases behind any
+    // refunds come along too: their items are what the refund is matched to.
+    let wanted: Vec<Uuid> = rows
+        .iter()
+        .flat_map(|row| {
+            let purchase = row
+                .refunds_charge_id
+                .and_then(|id| card.get(&id)?.receipt_id);
+            [row.receipt_id, purchase]
+        })
+        .flatten()
+        .collect();
+    let matched_receipts = super::receipts::by_id(db, wanted).await?;
+
+    let items_of = |charge: &models::Charge| {
+        charge
+            .receipt_id
+            .and_then(|id| matched_receipts.get(&id))
+            .map(|receipt| receipt.line_items.as_slice())
+            .unwrap_or_default()
+    };
+    let split_of = |charge: &models::Charge| match charge.receipt_id {
+        Some(_) => split_charge(charge.amount, currency, items_of(charge), &people),
+        None if charge.no_receipt => charge_to(charge.amount, currency, charge.person_id, &people),
+        None => Vec::new(),
+    };
 
     let mut charges = Vec::with_capacity(rows.len());
     for row in &rows {
+        let refunded = row.refunds_charge_id.and_then(|id| card.get(&id));
         let matched = row.receipt_id.and_then(|id| matched_receipts.get(&id));
 
-        let (resolution, split) = match matched {
-            Some(receipt) => {
-                let split = split_charge(row.amount, currency, &receipt.line_items, &people);
+        let (resolution, split) = match (refunded, matched) {
+            (Some(purchase), _) => (
+                dto::Resolution::Refund(dto::Refunded {
+                    charged_on: purchase.charged_on,
+                    description: purchase.description.clone(),
+                    amount: purchase.amount,
+                }),
+                split_refund(
+                    row.amount,
+                    currency,
+                    purchase.amount,
+                    items_of(purchase),
+                    &split_of(purchase),
+                    &people,
+                ),
+            ),
+            (None, Some(receipt)) => {
                 let matched = to_matched(receipt);
                 let resolution = if row.confirmed {
                     dto::Resolution::Confirmed(matched)
                 } else {
                     dto::Resolution::Proposed(matched)
                 };
-                (resolution, split)
+                (resolution, split_of(row))
             }
-            None if row.no_receipt => (
+            (None, None) if row.no_receipt => (
                 dto::Resolution::NoReceipt {
                     person_id: row.person_id,
                 },
-                charge_to(row.amount, currency, row.person_id, &people),
+                split_of(row),
             ),
-            None => (dto::Resolution::Unresolved, Vec::new()),
+            (None, None) => (dto::Resolution::Unresolved, Vec::new()),
         };
 
+        let unresolved = matches!(resolution, dto::Resolution::Unresolved);
         charges.push(dto::Charge {
             id: row.id,
             charged_on: row.charged_on,
             description: row.description.clone(),
             amount: row.amount,
-            suggestions: match resolution {
-                dto::Resolution::Unresolved => matching::candidates(
+            // Nothing to suggest once something accounts for it; the screen
+            // offers a way back to unresolved instead.
+            suggestions: if unresolved {
+                matching::candidates(
                     row.charged_on,
                     &row.description,
                     row.amount,
                     currency,
                     &free,
-                ),
-                // Nothing to suggest once something accounts for it; the screen
-                // offers a way back to unresolved instead.
-                _ => Vec::new(),
+                )
+            } else {
+                Vec::new()
             },
+            // Money coming back is the only thing a purchase can account for.
+            refundable: if unresolved && row.amount.is_sign_negative() {
+                refundable(row, &card)
+            } else {
+                Vec::new()
+            },
+            came_back: came_back(row.id, &card),
             resolution,
             split,
         });
@@ -215,6 +275,55 @@ pub async fn delete(db: &mut toasty::Db, id: Uuid) -> toasty::Result<()> {
     statement.delete().exec(&mut tx).await?;
 
     tx.commit().await
+}
+
+/// The purchases a refund might have come off, best first.
+///
+/// The merchant leads: a refund line names the shop that gave the money back,
+/// and there are usually several charges of the same size on a card. The amount
+/// then picks between that shop's charges. Both are on screen in the option
+/// itself, so neither needs saying twice.
+fn refundable(
+    refund: &models::Charge,
+    card: &HashMap<Uuid, models::Charge>,
+) -> Vec<dto::Refundable> {
+    let line = merchant::Line::new(&refund.description);
+    let back = -refund.amount;
+
+    let mut found: Vec<_> = card
+        .values()
+        // More back than went out is a different purchase, whatever else fits.
+        .filter(|purchase| purchase.amount >= back)
+        .filter_map(|purchase| {
+            let days = (refund.charged_on - purchase.charged_on).get_days();
+            let rank = (
+                Reverse(line.names(&purchase.description)),
+                Reverse(purchase.amount == back),
+                days,
+            );
+            (0..=REACH).contains(&days).then_some((rank, purchase))
+        })
+        .collect();
+
+    found.sort_by_key(|(rank, _)| *rank);
+    found
+        .into_iter()
+        .map(|(_, purchase)| dto::Refundable {
+            charge_id: purchase.id,
+            charged_on: purchase.charged_on,
+            description: purchase.description.clone(),
+            amount: purchase.amount,
+        })
+        .collect()
+}
+
+/// What the refunds pointing at a charge add up to, so money that came back off
+/// it is visible from the row it came off.
+fn came_back(charge_id: Uuid, card: &HashMap<Uuid, models::Charge>) -> Decimal {
+    card.values()
+        .filter(|refund| refund.refunds_charge_id == Some(charge_id))
+        .map(|refund| refund.amount)
+        .sum()
 }
 
 fn to_matched(receipt: &dto::Receipt) -> dto::Matched {
@@ -388,6 +497,84 @@ mod tests {
             dec("31.80"),
             "Ash: 13.81 + all of Netflix"
         );
+    }
+
+    /// A refund posts on the statement after the one it came off, and only that
+    /// purchase's receipt says whose the money was.
+    #[tokio::test]
+    async fn a_refund_follows_the_purchase_it_came_off() {
+        let mut db = memory_db().await;
+        let (josh, ash) = people(&mut db).await;
+        let receipt_id = costco(&mut db, josh, ash).await;
+
+        let july = imported(&mut db, "july.csv", CSV).await;
+        let august = imported(
+            &mut db,
+            "august.csv",
+            "Date,Description,Amount\n08/02/2026,COSTCO WHSE #1050 RETURN,-13.81\n",
+        )
+        .await;
+
+        let purchase = load(&mut db, july).await.unwrap().charges[0].id;
+        resolve(&mut db, purchase, dto::Resolve::Receipt(receipt_id))
+            .await
+            .unwrap();
+
+        // No receipt of its own to match, but the purchases are offered — the
+        // one the line names first.
+        let statement = load(&mut db, august).await.unwrap();
+        let refund = &statement.charges[0];
+        assert!(refund.suggestions.is_empty());
+        let offered: Vec<_> = refund
+            .refundable
+            .iter()
+            .map(|r| r.description.as_str())
+            .collect();
+        assert_eq!(offered, ["COSTCO WHSE #1050", "NETFLIX.COM"]);
+
+        resolve(&mut db, refund.id, dto::Resolve::Refunds(purchase))
+            .await
+            .unwrap();
+
+        let statement = load(&mut db, august).await.unwrap();
+        let refund = &statement.charges[0];
+        assert!(matches!(refund.resolution, dto::Resolution::Refund(_)));
+        assert_eq!(statement.settled(), 1, "which accounts for it");
+        assert_eq!(statement.outstanding(), (0, Decimal::ZERO));
+
+        // 13.81 is the 12.82 dog food plus the tax it carried, and the dog food
+        // was Ash's. People come in name order, so Ash leads.
+        let owed: Vec<_> = refund.split.iter().map(|s| s.amount).collect();
+        assert_eq!(owed, [dec("-13.81"), dec("0.00")]);
+        assert_eq!(owed.iter().sum::<Decimal>(), statement.total());
+
+        // And it shows on the purchase, which is the only place you'd see it —
+        // the refund itself is on a statement you aren't looking at.
+        let july = load(&mut db, july).await.unwrap();
+        assert_eq!(july.charges[0].came_back, dec("-13.81"));
+    }
+
+    /// Refunds point one way. Both of these would otherwise settle a row against
+    /// something that never paid for it.
+    #[tokio::test]
+    async fn only_money_coming_back_can_refund_a_purchase() {
+        let mut db = memory_db().await;
+        people(&mut db).await;
+
+        let id = imported(&mut db, "july.csv", CSV).await;
+        let charges = load(&mut db, id).await.unwrap().charges;
+        let (costco, netflix) = (charges[0].id, charges[1].id);
+
+        // Netflix is a purchase, not money back.
+        let err = resolve(&mut db, netflix, dto::Resolve::Refunds(costco))
+            .await
+            .unwrap_err();
+        assert!(format!("{err}").contains("only money coming back"), "{err}");
+
+        let err = resolve(&mut db, costco, dto::Resolve::Refunds(costco))
+            .await
+            .unwrap_err();
+        assert!(format!("{err}").contains("only money coming back"), "{err}");
     }
 
     /// Two charges for the same amount is where guessing does damage, so only the

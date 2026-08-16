@@ -70,6 +70,14 @@ pub fn split_charge(
     items: &[LineItem],
     people: &[Person],
 ) -> Vec<Share> {
+    let all: Vec<&LineItem> = items.iter().collect();
+
+    shares(amount, currency, &weigh(&all, people), people)
+}
+
+/// What each person's share of these items comes to, unassigned ones spread
+/// evenly between everybody.
+pub(super) fn weigh(items: &[&LineItem], people: &[Person]) -> Vec<Decimal> {
     let sum = |whose: Option<Uuid>| -> Decimal {
         items
             .iter()
@@ -78,9 +86,8 @@ pub fn split_charge(
             .sum()
     };
     let each = sum(None) / Decimal::from(people.len().max(1));
-    let weights: Vec<Decimal> = people.iter().map(|p| sum(Some(p.id)) + each).collect();
 
-    shares(amount, currency, &weights, people)
+    people.iter().map(|p| sum(Some(p.id)) + each).collect()
 }
 
 /// The whole charge on one person, or split evenly when nobody is named.
@@ -104,7 +111,12 @@ pub fn charge_to(
 }
 
 /// Hands `amount` out in proportion to `weights`, one share per person.
-fn shares(amount: Decimal, currency: &str, weights: &[Decimal], people: &[Person]) -> Vec<Share> {
+pub(super) fn shares(
+    amount: Decimal,
+    currency: &str,
+    weights: &[Decimal],
+    people: &[Person],
+) -> Vec<Share> {
     if people.is_empty() {
         return Vec::new();
     }
@@ -127,7 +139,7 @@ fn shares(amount: Decimal, currency: &str, weights: &[Decimal], people: &[Person
 }
 
 /// How many decimal places the currency's smallest unit has.
-fn minor_units(currency: &str) -> u32 {
+pub(super) fn minor_units(currency: &str) -> u32 {
     iso_currency::Currency::from_code(currency)
         .and_then(|c| c.exponent())
         .unwrap_or(2) as u32
@@ -177,8 +189,8 @@ fn allocate(amount: Decimal, currency: &str, weights: &[Decimal]) -> Vec<Decimal
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::dto::Resolution::{Confirmed, NoReceipt, Proposed, Unresolved};
-    use crate::shared::testing::{charge, charged_to, dec, matched, pair, statement};
+    use crate::shared::dto::Resolution::{Confirmed, NoReceipt, Proposed, Refund, Unresolved};
+    use crate::shared::testing::{charge, charged_to, dec, matched, pair, refunded, statement};
 
     /// The amounts a split hands out, in people order.
     fn amounts(shares: &[Share]) -> Vec<Decimal> {
@@ -276,13 +288,18 @@ mod tests {
             charge("NETFLIX", "17.99", NoReceipt { person_id: None }),
             charge("CAFE", "9.00", Proposed(matched("Blue Bottle"))),
             charge("MYSTERY", "5.01", Unresolved),
+            charge(
+                "COSTCO RETURN",
+                "-4.00",
+                Refund(refunded("COSTCO", "20.00")),
+            ),
         ]);
 
-        assert_eq!(statement.settled(), 2, "a proposal is not settled");
+        assert_eq!(statement.settled(), 3, "a proposal is not settled");
         assert_eq!(statement.outstanding(), (2, dec("14.01")));
 
         let owed: Decimal = statement.totals().iter().map(|t| t.amount).sum();
         assert_eq!(owed + statement.outstanding().1, statement.total());
-        assert_eq!(statement.total(), dec("52.00"));
+        assert_eq!(statement.total(), dec("48.00"));
     }
 }

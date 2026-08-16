@@ -151,6 +151,12 @@ pub struct Charge {
     /// [`Self::no_receipt`] is set — a matched receipt splits by its own items.
     #[index]
     pub person_id: Option<Uuid>,
+
+    /// The purchase this refund hands money back on. Any statement — a refund
+    /// usually posts on the next one. Indexed because a purchase's row asks
+    /// what has come back off it.
+    #[index]
+    pub refunds_charge_id: Option<Uuid>,
 }
 
 /// Extraction runs in the background (a 7B vision model takes far too long to

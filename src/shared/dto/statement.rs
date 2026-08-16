@@ -67,6 +67,24 @@ pub struct Matched {
     pub problems: Vec<String>,
 }
 
+/// The purchase a refund hands money back on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Refunded {
+    pub charged_on: jiff::civil::Date,
+    pub description: String,
+    /// What was originally charged, so a partial refund is visible as one.
+    pub amount: Decimal,
+}
+
+/// A purchase a refund might be reversing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Refundable {
+    pub charge_id: Uuid,
+    pub charged_on: jiff::civil::Date,
+    pub description: String,
+    pub amount: Decimal,
+}
+
 /// How a charge is accounted for.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Resolution {
@@ -81,12 +99,18 @@ pub enum Resolution {
     /// Deliberately receiptless — a subscription, a fee, interest. `None` splits
     /// it evenly.
     NoReceipt { person_id: Option<Uuid> },
+    /// Money back on a purchase already on the card. The purchase's receipt says
+    /// who spent it, so it says who gets it back.
+    Refund(Refunded),
 }
 
 impl Resolution {
     /// Whether a human has signed this row off. Only these reach the export.
     pub fn is_settled(&self) -> bool {
-        matches!(self, Self::Confirmed(_) | Self::NoReceipt { .. })
+        matches!(
+            self,
+            Self::Confirmed(_) | Self::NoReceipt { .. } | Self::Refund(_)
+        )
     }
 
     pub fn receipt(&self) -> Option<&Matched> {
@@ -105,6 +129,8 @@ pub enum Resolve {
     Receipt(Uuid),
     /// No receipt is coming. `None` splits it evenly.
     NoReceipt { person_id: Option<Uuid> },
+    /// This is money back on that purchase.
+    Refunds(Uuid),
     /// Back to unresolved.
     Clear,
 }
@@ -127,6 +153,12 @@ pub struct Charge {
     pub resolution: Resolution,
     /// Receipts worth offering, best first. Empty once one is attached.
     pub suggestions: Vec<Candidate>,
+    /// Purchases this refund might be reversing, best first. Only filled in for
+    /// an unresolved refund.
+    pub refundable: Vec<Refundable>,
+    /// What the refunds pointing here add up to — negative, and zero for the
+    /// charges nothing has come back off.
+    pub came_back: Decimal,
     /// What each person owes, in [`Statement::people`] order. Empty while
     /// nothing accounts for the charge.
     ///

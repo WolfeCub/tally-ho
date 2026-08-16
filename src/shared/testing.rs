@@ -71,6 +71,17 @@ pub fn charge(description: &str, amount: &str, resolution: Resolution) -> Charge
         split: split_charge(amount, "USD", &[], &pair()),
         resolution,
         suggestions: Vec::new(),
+        refundable: Vec::new(),
+        came_back: Decimal::ZERO,
+    }
+}
+
+/// The purchase a refund points at.
+pub fn refunded(description: &str, amount: &str) -> crate::shared::dto::Refunded {
+    crate::shared::dto::Refunded {
+        charged_on: jiff::civil::date(2026, 7, 4),
+        description: description.into(),
+        amount: dec(amount),
     }
 }
 

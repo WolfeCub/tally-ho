@@ -11,6 +11,7 @@ pub mod export;
 pub mod parse;
 pub mod problems;
 pub mod reconcile;
+pub mod refund;
 
 #[cfg(test)]
 pub mod testing;

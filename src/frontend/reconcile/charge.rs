@@ -11,7 +11,7 @@ use crate::frontend::money::{money, shares_line};
 use crate::frontend::text::{merchant, plural, total_or_why};
 use crate::shared::api::upload_receipt;
 use crate::shared::dto::{
-    Candidate, Charge, Matched, Person, ReceiptSummary, Resolution, Resolve, Share,
+    Candidate, Charge, Matched, Person, ReceiptSummary, Refundable, Resolution, Resolve, Share,
 };
 
 /// A row action. Narrower than a full [`crate::frontend::components::BUTTON`] so
@@ -68,6 +68,16 @@ pub fn ChargeRow(
                 <span class="shrink-0 tabular-nums">{shared.money(charge.amount)}</span>
             </div>
 
+            // On the purchase, because the refund is usually on the next
+            // statement where you won't see it.
+            {(!charge.came_back.is_zero())
+                .then(|| {
+                    view! {
+                        <p class="mt-1 text-sm text-muted">
+                            {format!("{} came back later", shared.money(-charge.came_back))}
+                        </p>
+                    }
+                })}
             <ChargeBody charge shared resolve />
         </li>
     }
@@ -125,6 +135,16 @@ fn ChargeBody(
 
         Resolution::NoReceipt { .. } => view! {
             <p class="mt-1 text-sm text-muted">"No receipt · " {split}</p>
+            <div class="mt-2">{undo()}</div>
+        }
+        .into_any(),
+
+        Resolution::Refund(purchase) => view! {
+            <p class="mt-1 text-sm">
+                "Money back on " <span class="font-medium">{purchase.description.clone()}</span>
+                {format!(" · {} · {}", purchase.charged_on, shared.money(purchase.amount))}
+            </p>
+            <p class="mt-0.5 text-sm text-muted">{split}</p>
             <div class="mt-2">{undo()}</div>
         }
         .into_any(),
@@ -209,6 +229,7 @@ fn Suggestions(
     resolve: impl Fn(Uuid, Resolve) + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
     let charge_id = charge.id;
+    let refundable = charge.refundable;
     view! {
         <ul class="mt-2 flex flex-col gap-1">
             {charge
@@ -219,10 +240,66 @@ fn Suggestions(
         </ul>
 
         <div class="mt-2 flex flex-wrap gap-2">
+            {(!refundable.is_empty())
+                .then(|| view! { <RefundSelect charge_id refundable shared resolve /> })}
             <AttachSelect charge_id shared resolve />
             <NoReceiptSelect charge_id shared resolve />
             <Photograph charge_id resolve />
         </div>
+    }
+}
+
+/// The purchase money came back on. Only ever offered for a refund, and then
+/// it's the answer: that purchase's receipt says who gets it.
+#[component]
+fn RefundSelect(
+    charge_id: Uuid,
+    refundable: Vec<Refundable>,
+    shared: Shared,
+    resolve: impl Fn(Uuid, Resolve) + Copy + Send + Sync + 'static,
+) -> impl IntoView {
+    let describe = |purchase: &Refundable| {
+        format!(
+            "{} · {} · {}",
+            purchase.charged_on,
+            purchase.description,
+            shared.money(purchase.amount),
+        )
+    };
+    let options = refundable
+        .iter()
+        .map(|purchase| (purchase.charge_id, describe(purchase)))
+        .collect();
+
+    view! { <Pick prompt="Money back on…" options means=Resolve::Refunds charge_id resolve /> }
+}
+
+/// One of a list of things that could account for a charge, best first.
+#[component]
+fn Pick(
+    prompt: &'static str,
+    options: Vec<(Uuid, String)>,
+    /// What picking one means.
+    means: impl Fn(Uuid) -> Resolve + Copy + Send + Sync + 'static,
+    charge_id: Uuid,
+    resolve: impl Fn(Uuid, Resolve) + Copy + Send + Sync + 'static,
+) -> impl IntoView {
+    view! {
+        <select
+            class=format!("{INPUT} min-h-11 flex-1 text-sm")
+            aria-label=prompt
+            on:change:target=move |ev| {
+                if let Ok(id) = Uuid::parse_str(&ev.target().value()) {
+                    resolve(charge_id, means(id));
+                }
+            }
+        >
+            <option value="">{prompt}</option>
+            {options
+                .into_iter()
+                .map(|(id, text)| view! { <option value=id.to_string()>{text}</option> })
+                .collect_view()}
+        </select>
     }
 }
 
@@ -270,32 +347,11 @@ fn AttachSelect(
             total_or_why(receipt.total, &receipt.currency, receipt.status),
         )
     };
+    let options = shared
+        .spare
+        .with_value(|spare| spare.iter().map(|r| (r.id, describe(r))).collect());
 
-    view! {
-        <select
-            class=format!("{INPUT} min-h-11 flex-1 text-sm")
-            aria-label="Attach a receipt"
-            on:change:target=move |ev| {
-                if let Ok(receipt_id) = Uuid::parse_str(&ev.target().value()) {
-                    resolve(charge_id, Resolve::Receipt(receipt_id));
-                }
-            }
-        >
-            <option value="">"Attach a receipt…"</option>
-            {shared
-                .spare
-                .with_value(|spare| {
-                    spare
-                        .iter()
-                        .map(|receipt| {
-                            view! {
-                                <option value=receipt.id.to_string()>{describe(receipt)}</option>
-                            }
-                        })
-                        .collect_view()
-                })}
-        </select>
-    }
+    view! { <Pick prompt="Attach a receipt…" options means=Resolve::Receipt charge_id resolve /> }
 }
 
 /// For a charge that will never have one: a subscription, a fee, interest.
