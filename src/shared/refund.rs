@@ -7,7 +7,7 @@
 use rust_decimal::Decimal;
 
 use crate::shared::dto::{LineItem, Person, Share};
-use crate::shared::reconcile::{minor_units, shares, weigh};
+use crate::shared::reconcile::{charged, minor_units, shares, weigh};
 
 /// Past this many items the search isn't worth running: too many combinations,
 /// and a sum that lands on the amount stops being evidence.
@@ -30,7 +30,7 @@ pub fn split_refund(
     people: &[Person],
 ) -> Vec<Share> {
     let weights = match went_back(-amount, currency, purchase, items) {
-        Some(back) => weigh(&back, people),
+        Some(back) => weigh(&charged(back), people),
         None => people
             .iter()
             .map(|person| {

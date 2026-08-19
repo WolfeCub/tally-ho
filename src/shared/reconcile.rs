@@ -70,19 +70,25 @@ pub fn split_charge(
     items: &[LineItem],
     people: &[Person],
 ) -> Vec<Share> {
-    let all: Vec<&LineItem> = items.iter().collect();
+    shares(amount, currency, &weigh(&charged(items), people), people)
+}
 
-    shares(amount, currency, &weigh(&all, people), people)
+/// Line items as [`weigh`] wants them: who each one is charged to, and how much.
+pub fn charged<'a>(items: impl IntoIterator<Item = &'a LineItem>) -> Vec<(Option<Uuid>, Decimal)> {
+    items
+        .into_iter()
+        .map(|item| (item.person_id, item.total))
+        .collect()
 }
 
 /// What each person's share of these items comes to, unassigned ones spread
-/// evenly between everybody.
-pub(super) fn weigh(items: &[&LineItem], people: &[Person]) -> Vec<Decimal> {
+/// evenly between everybody. In `people` order.
+pub fn weigh(items: &[(Option<Uuid>, Decimal)], people: &[Person]) -> Vec<Decimal> {
     let sum = |whose: Option<Uuid>| -> Decimal {
         items
             .iter()
-            .filter(|item| item.person_id == whose)
-            .map(|item| item.total)
+            .filter(|(person_id, _)| *person_id == whose)
+            .map(|(_, total)| *total)
             .sum()
     };
     let each = sum(None) / Decimal::from(people.len().max(1));

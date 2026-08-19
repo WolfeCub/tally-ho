@@ -24,6 +24,15 @@ pub trait Rows<T> {
     /// Applies `edit` to one row, if it is still there.
     fn edit(&self, key: usize, edit: impl FnOnce(&mut T));
 
+    /// One field of one row, following whatever changes it — a button that
+    /// rewrites the whole list, not just the input next to it. The default once
+    /// the row is gone.
+    ///
+    /// A `fn` pointer for the same reason [`Self::setter`] takes one.
+    fn watch<V>(&self, key: usize, read: fn(&T) -> V) -> Memo<V>
+    where
+        V: Default + PartialEq + Send + Sync + 'static;
+
     /// The setter every input on one row shares:
     /// `edit(|row, v| row.name = v, ev.target().value())`.
     ///
@@ -58,5 +67,19 @@ impl<T: Keyed + Send + Sync + 'static> Rows<T> for RwSignal<Vec<T>> {
                 edit(row);
             }
         });
+    }
+
+    fn watch<V>(&self, key: usize, read: fn(&T) -> V) -> Memo<V>
+    where
+        V: Default + PartialEq + Send + Sync + 'static,
+    {
+        let rows = *self;
+        Memo::new(move |_| {
+            rows.with(|rows| {
+                rows.iter()
+                    .find(|row| row.key() == key)
+                    .map_or_else(V::default, read)
+            })
+        })
     }
 }
