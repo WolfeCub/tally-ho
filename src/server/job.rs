@@ -4,24 +4,78 @@
 //! work, so it never runs inline with the upload request — a phone would sit
 //! there spinning. The upload returns as soon as the row exists, and the client
 //! polls `receipt_status`.
+//!
+//! One receipt is read at a time. Two of these in flight are two photos and two
+//! models against one GPU: Ollama serializes past its own parallel limit
+//! anyway, so a second receipt makes both slow rather than either one fast, and
+//! at worst evicts a model mid-run. Queued receipts sit in
+//! [`ExtractionStatus::Pending`] until their turn, which is what the capture
+//! screen already reports as "queued behind the other photos".
 
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use super::assign;
 use super::models::{ExtractionStatus, Receipt};
 use super::state::AppState;
 
-/// Spawns extraction for an already-persisted receipt and returns immediately.
-pub fn spawn(state: AppState, receipt_id: Uuid) {
-    tokio::spawn(async move {
-        if let Err(e) = run(&state, receipt_id).await {
-            // The job owns its own error reporting: nothing is awaiting this
-            // task, so a swallowed error would leave the receipt stuck in
-            // `Extracting` forever with no trace.
-            tracing::error!(%receipt_id, error = %e, "extraction job failed");
-            let _ = mark_failed(&state, receipt_id, &e.to_string()).await;
+/// Hands uploaded receipts to the extraction worker, oldest first. Cheap to
+/// clone: it's a channel sender.
+#[derive(Clone)]
+pub struct Queue(mpsc::UnboundedSender<Uuid>);
+
+/// The other half of a [`Queue`], which reads it once there's an [`AppState`] to
+/// read it with.
+pub struct Worker(mpsc::UnboundedReceiver<Uuid>);
+
+/// Unbounded on purpose: an upload must never block on how far behind the model
+/// is, and the depth is however many photos a person took.
+///
+/// Split in two because the worker runs against the `AppState` that owns the
+/// queue, so the sender has to exist before the state does.
+pub fn queue() -> (Queue, Worker) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    (Queue(tx), Worker(rx))
+}
+
+impl Queue {
+    /// Queues an already-persisted receipt for extraction and returns
+    /// immediately.
+    pub fn push(&self, receipt_id: Uuid) {
+        // Only fails once the worker is gone, i.e. during shutdown. The receipt
+        // keeps its row and its photo, so the retry button can still reach it.
+        if self.0.send(receipt_id).is_err() {
+            tracing::error!(%receipt_id, "extraction worker has stopped");
         }
-    });
+    }
+}
+
+impl Worker {
+    /// Reads queued receipts one at a time for as long as the process lives.
+    pub fn spawn(mut self, state: AppState) {
+        tokio::spawn(async move {
+            while let Some(receipt_id) = self.0.recv().await {
+                // Each job gets its own task so a panic takes down that receipt
+                // and not the worker with it; awaiting it here is what keeps
+                // this to one at a time.
+                let job = tokio::spawn({
+                    let state = state.clone();
+                    async move { run(&state, receipt_id).await }
+                });
+
+                // The job owns its own error reporting: nothing downstream is
+                // awaiting it, so a swallowed error would leave the receipt
+                // stuck mid-extraction forever with no trace.
+                let failure = match job.await {
+                    Ok(Ok(())) => continue,
+                    Ok(Err(e)) => e.to_string(),
+                    Err(e) => format!("extraction panicked: {e}"),
+                };
+                tracing::error!(%receipt_id, error = %failure, "extraction job failed");
+                let _ = mark_failed(&state, receipt_id, &failure).await;
+            }
+        });
+    }
 }
 
 /// Boxed error must be `Send + Sync`: this runs inside `tokio::spawn`, whose

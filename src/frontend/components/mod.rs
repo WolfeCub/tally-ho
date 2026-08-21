@@ -6,16 +6,20 @@ mod form;
 mod icons;
 mod notice;
 mod photo;
+mod picker;
 mod receipt_rows;
 mod steps;
+mod toggle;
 
 pub use bar::Bar;
 pub use form::{LabeledInput, confirm, field, form_element, upload_action, uploads_to};
 pub use icons::{CameraIcon, Spinner, Verdict};
 pub use notice::{Notice, Tone, error_notice, failed, loading};
 pub use photo::ReceiptPhoto;
+pub use picker::FuzzyPick;
 pub use receipt_rows::ReceiptRows;
 pub use steps::StepBar;
+pub use toggle::Toggle;
 
 /// Class strings that would otherwise drift apart as they get copied around.
 /// Anything extra goes on the end: `format!("{BUTTON} w-full")`.

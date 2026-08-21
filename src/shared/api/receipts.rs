@@ -11,7 +11,6 @@ use crate::shared::dto;
 #[cfg(feature = "ssr")]
 use {
     super::support::{Reported as _, db, one_file},
-    crate::server::job,
     crate::server::queries::receipts,
     crate::server::state::AppState,
     crate::shared::parse,
@@ -42,7 +41,7 @@ pub async fn upload_receipt(data: MultipartData) -> Result<Uuid, ServerFnError> 
         .await
         .reported_as("could not create receipt")?;
 
-    job::spawn(state.clone(), id);
+    state.jobs.push(id);
 
     Ok(id)
 }
@@ -61,11 +60,11 @@ pub async fn retry_extraction(id: Uuid) -> Result<(), ServerFnError> {
     let state = expect_context::<AppState>();
     let mut db = state.db.clone();
 
-    // Reset before spawning, so the caller's reload sees a receipt that's
+    // Reset before queueing, so the caller's reload sees a receipt that's
     // working again rather than the failure it just retried.
     receipts::reset_for_retry(&mut db, id).await.reported()?;
 
-    job::spawn(state, id);
+    state.jobs.push(id);
     Ok(())
 }
 

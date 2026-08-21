@@ -5,6 +5,10 @@
 //! that do pay for a charge share no word with the line that charged them.
 //! Recognising the merchant counts for a receipt; not recognising it counts for
 //! nothing, and never against.
+//!
+//! Money coming back matches the same way, against a return slip: a receipt with
+//! a negative total. The sign has to agree, so nothing here ever offers a
+//! purchase for the refund that undid it.
 
 // Also used to pair a refund with the purchase it came off.
 pub(super) mod merchant;
@@ -59,8 +63,15 @@ impl Fit {
     fn of(charge: Decimal, total: Decimal, receipt: &dto::Receipt) -> Self {
         let over = charge - total;
         if over.is_zero() {
-            Self::Exact
-        } else if with_tip(receipt).any(|tipped| (charge - tipped).abs() <= slack()) {
+            return Self::Exact;
+        }
+        // Nothing below applies to money coming back: a refund is never tipped,
+        // so an amount that isn't the slip's is a different refund.
+        if charge.is_sign_negative() {
+            return Self::Unrelated;
+        }
+
+        if with_tip(receipt).any(|tipped| (charge - tipped).abs() <= slack()) {
             Self::UsualTip
         // Past a quarter of the bill nobody tips that much: it's a different
         // purchase, and only worth offering as one.
@@ -93,17 +104,20 @@ pub fn candidates<'a>(
     currency: &str,
     available: impl IntoIterator<Item = &'a dto::Receipt>,
 ) -> Vec<dto::Candidate> {
-    // A refund has no receipt to match: totals are positive.
-    if amount.is_sign_negative() {
-        return Vec::new();
-    }
-
     let line = merchant::Line::new(description);
     let mut ranked: Vec<_> = available
         .into_iter()
         .filter(|receipt| receipt.currency == currency)
         .filter_map(|receipt| {
             let total = receipt.total?;
+
+            // Money back is accounted for by a receipt for money back: a return
+            // slip, which is a receipt like any other. Crossing the sign would
+            // offer the purchase for the refund that undid it.
+            if total.is_sign_negative() != amount.is_sign_negative() {
+                return None;
+            }
+
             let fit = Fit::of(amount, total, receipt);
             let days = (charged_on - receipt.purchased_on).get_days();
             let in_window = (EARLIEST..=LATEST).contains(&days);
@@ -398,12 +412,37 @@ mod tests {
     }
 
     #[test]
-    fn nothing_crosses_currencies_or_matches_a_refund() {
+    fn nothing_crosses_currencies_or_the_sign() {
         let mut canadian = receipt(10, "35.36");
         canadian.currency = "CAD".into();
         assert!(offers("35.36", &[canadian]).is_empty());
 
+        // The purchase is not on offer for the refund that undid it, either way
+        // round.
         assert!(offers("-12.00", &[receipt(10, "12.00")]).is_empty());
+        assert!(offers("12.00", &[receipt(10, "-12.00")]).is_empty());
+    }
+
+    /// A return slip is a receipt like any other, and it says who gets the money
+    /// back directly. Without this a refund could only be accounted for by
+    /// pointing it at the purchase, and the slip's own items went unused.
+    #[test]
+    fn a_refund_matches_a_receipt_for_money_back() {
+        let receipts = [receipt(8, "-13.81")];
+        let offered = offers("-13.81", &receipts);
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0].why, "exact amount");
+        assert_eq!(automatic(&offered), Some(receipts[0].id));
+    }
+
+    /// Nobody tips a refund, so the amount either is the slip's or isn't. Still
+    /// offered on the date, since picking one by hand is what that list is for.
+    #[test]
+    fn a_refund_is_only_confident_on_the_exact_amount() {
+        let offered = offers("-15.00", &[receipt(10, "-13.81")]);
+        assert_eq!(offered[0].why, "same day");
+        assert!(!offered[0].confident);
+        assert_eq!(automatic(&offered), None);
     }
 
     /// Receipts in the window that explain none of the charge are still worth

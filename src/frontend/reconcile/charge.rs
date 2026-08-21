@@ -6,7 +6,7 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::frontend::actions::error_of;
-use crate::frontend::components::{INPUT, Spinner, upload_action};
+use crate::frontend::components::{FuzzyPick, INPUT, Spinner, upload_action};
 use crate::frontend::money::{money, shares_line};
 use crate::frontend::text::{merchant, plural, total_or_why};
 use crate::shared::api::upload_receipt;
@@ -271,35 +271,12 @@ fn RefundSelect(
         .map(|purchase| (purchase.charge_id, describe(purchase)))
         .collect();
 
-    view! { <Pick prompt="Money back on…" options means=Resolve::Refunds charge_id resolve /> }
-}
-
-/// One of a list of things that could account for a charge, best first.
-#[component]
-fn Pick(
-    prompt: &'static str,
-    options: Vec<(Uuid, String)>,
-    /// What picking one means.
-    means: impl Fn(Uuid) -> Resolve + Copy + Send + Sync + 'static,
-    charge_id: Uuid,
-    resolve: impl Fn(Uuid, Resolve) + Copy + Send + Sync + 'static,
-) -> impl IntoView {
     view! {
-        <select
-            class=format!("{INPUT} min-h-11 flex-1 text-sm")
-            aria-label=prompt
-            on:change:target=move |ev| {
-                if let Ok(id) = Uuid::parse_str(&ev.target().value()) {
-                    resolve(charge_id, means(id));
-                }
-            }
-        >
-            <option value="">{prompt}</option>
-            {options
-                .into_iter()
-                .map(|(id, text)| view! { <option value=id.to_string()>{text}</option> })
-                .collect_view()}
-        </select>
+        <FuzzyPick
+            prompt="Money back on…"
+            options
+            on_pick=move |purchase_id| resolve(charge_id, Resolve::Refunds(purchase_id))
+        />
     }
 }
 
@@ -351,7 +328,13 @@ fn AttachSelect(
         .spare
         .with_value(|spare| spare.iter().map(|r| (r.id, describe(r))).collect());
 
-    view! { <Pick prompt="Attach a receipt…" options means=Resolve::Receipt charge_id resolve /> }
+    view! {
+        <FuzzyPick
+            prompt="Attach a receipt…"
+            options
+            on_pick=move |receipt_id| resolve(charge_id, Resolve::Receipt(receipt_id))
+        />
+    }
 }
 
 /// For a charge that will never have one: a subscription, a fee, interest.

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use super::assign::{self, ItemAssigner, OllamaAssigner};
 use super::extract::{Config, OllamaExtractor, ReceiptExtractor};
+use super::job;
 use super::store::Store;
 
 const DEFAULT_CURRENCY: &str = "USD";
@@ -21,6 +22,8 @@ pub struct AppState {
     /// trait object as above.
     pub assigner: Arc<dyn ItemAssigner>,
     pub store: Arc<Store>,
+    /// Where an upload hands its receipt off to be read, one at a time.
+    pub jobs: job::Queue,
     /// The ISO code imported statements are in, and what a receipt is taken to
     /// be in when it doesn't print one. One card, one currency — so it's
     /// deployment config rather than a question on every upload.
@@ -42,13 +45,21 @@ impl AppState {
         );
         tracing::info!(model = %assigning.model, "assignment configured");
 
-        Ok(Self {
+        let (jobs, worker) = job::queue();
+        let state = Self {
             db: crate::server::db::connect().await?,
             extractor: Arc::new(OllamaExtractor::new(config)?),
             assigner: Arc::new(OllamaAssigner::new(assigning)?),
             store: Arc::new(Store::from_env()),
+            jobs,
             currency,
-        })
+        };
+
+        // Started here rather than by the caller, so there's no way to hold a
+        // state whose queue nothing is reading.
+        worker.spawn(state.clone());
+
+        Ok(state)
     }
 }
 

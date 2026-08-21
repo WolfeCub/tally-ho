@@ -8,8 +8,8 @@ use uuid::Uuid;
 
 use crate::frontend::actions::{error_of, succeeded};
 use crate::frontend::components::{
-    AS_BUTTON, BUTTON, Bar, DANGER, INPUT, PRIMARY, ROW, confirm, error_notice, upload_action,
-    uploads_to,
+    AS_BUTTON, BUTTON, Bar, DANGER, INPUT, PRIMARY, ROW, Toggle, confirm, error_notice,
+    upload_action, uploads_to,
 };
 use crate::frontend::money::{money, money_total, shares_line};
 use crate::frontend::poll::{self, poll_until_settled};
@@ -233,17 +233,9 @@ fn StatementView(
 
         {move || error_notice(error_of(resolve))}
 
-        <label class="mb-2 flex items-center gap-2 text-sm text-muted">
-            // `prop:` and not the attribute: the attribute is only the starting
-            // state, so the box would drift from the filter it stands for.
-            <input
-                type="checkbox"
-                class="size-4"
-                prop:checked=move || hide_done.get()
-                on:change:target=move |ev| hide_done.set(ev.target().checked())
-            />
-            "Hide what's done"
-        </label>
+        <div class="mb-3 flex">
+            <Toggle label="Hide reconciled" on=hide_done />
+        </div>
 
         <ul class="flex flex-col gap-2">
             {move || {

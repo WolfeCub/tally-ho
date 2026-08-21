@@ -55,6 +55,8 @@ pub fn money(raw: &str) -> Option<Decimal> {
 /// 2021-08-12, not 2021-12-08. This is deliberately a fixed rule rather than a
 /// guess: being consistently wrong on a non-US receipt is recoverable in the
 /// review screen, whereas being unpredictably wrong is not detectable at all.
+/// A first field over 12 is not ambiguous at all, though, so `14/08/26` is
+/// read day-first.
 pub fn date(raw: &str) -> Option<jiff::civil::Date> {
     let s = raw.trim();
 
@@ -86,7 +88,9 @@ pub fn date(raw: &str) -> Option<jiff::civil::Date> {
     // MM/DD/YY(YY). Two-digit years are assumed current-century; receipts are
     // not historical documents.
     let year = if parts[2].len() <= 2 { 2000 + c } else { c };
-    jiff::civil::Date::new(year as i16, a as i8, b).ok()
+    // A first field over 12 can only be a day, so read those DD/MM/YY.
+    let (month, day) = if a > 12 { (b, a as i8) } else { (a as i8, b) };
+    jiff::civil::Date::new(year as i16, month, day).ok()
 }
 
 /// A month spelled out: "28 Jul 2026", "July 28, 2026", "28-JUL-26". Amex writes
@@ -199,9 +203,16 @@ mod tests {
     fn ambiguous_numeric_dates_are_month_first() {
         assert_eq!(date("08/12/21"), Some(jiff::civil::date(2021, 8, 12)));
         assert_eq!(date("01/02/26"), Some(jiff::civil::date(2026, 1, 2)));
-        // Unambiguous: 13 cannot be a month, so this is not silently accepted
-        // as December 13th.
-        assert_eq!(date("13/02/26"), None);
+    }
+
+    /// A first field over 12 is a day, and the month-first rule doesn't apply.
+    /// These came off a receipt as `14/08/26` and were dropped entirely.
+    #[test]
+    fn numeric_dates_over_twelve_are_day_first() {
+        assert_eq!(date("14/08/26"), Some(jiff::civil::date(2026, 8, 14)));
+        assert_eq!(date("15/08/26"), Some(jiff::civil::date(2026, 8, 15)));
+        assert_eq!(date("13/02/26"), Some(jiff::civil::date(2026, 2, 13)));
+        assert_eq!(date("31/12/2026"), Some(jiff::civil::date(2026, 12, 31)));
     }
 
     #[test]

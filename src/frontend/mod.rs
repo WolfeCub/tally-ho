@@ -7,6 +7,7 @@
 mod actions;
 mod capture;
 mod components;
+mod fuzzy;
 mod money;
 mod poll;
 mod receipts;

@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 
-use crate::frontend::components::ReceiptRows;
+use crate::frontend::components::{ReceiptRows, Toggle};
 use crate::frontend::poll::poll_while;
 use crate::frontend::screen;
 use crate::shared::api::recent_receipts;
@@ -29,12 +29,20 @@ pub fn ReceiptListPage() -> impl IntoView {
 
     poll_while(tick, move || waiting.get());
 
+    // Held here rather than in the list, which is rebuilt on every poll.
+    let hide_checked = RwSignal::new(false);
+
     view! {
         <h1 class="mb-4 text-xl font-semibold">"Receipts"</h1>
+
+        <div class="mb-3 flex">
+            <Toggle label="Hide checked" on=hide_checked />
+        </div>
+
         {screen::listing(
             receipts,
             "No receipts yet.",
-            |rows| view! { <ReceiptRows rows /> }.into_any(),
+            move |rows| view! { <ReceiptRows rows hide_checked /> }.into_any(),
         )}
     }
 }
