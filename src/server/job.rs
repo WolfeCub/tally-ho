@@ -121,7 +121,7 @@ async fn run(state: &AppState, receipt_id: Uuid) -> Result<(), JobError> {
         // Receipts often don't print a currency, and one in the wrong currency
         // matches no charge at all. So fall back to what the statements are in
         // rather than to a guess.
-        currency: n.currency.unwrap_or_else(|| state.currency.clone()),
+        currency: n.currency.unwrap_or_else(|| state.default_currency.clone()),
         subtotal: n.subtotal,
         tax: n.tax,
         total: n.total,

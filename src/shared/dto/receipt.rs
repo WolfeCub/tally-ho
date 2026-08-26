@@ -78,6 +78,8 @@ pub struct Receipt {
     pub status: ExtractionStatus,
     pub extraction_error: Option<String>,
     pub reviewed: bool,
+    /// False for one typed in by hand.
+    pub has_photo: bool,
     pub line_items: Vec<LineItem>,
 }
 

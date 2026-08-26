@@ -54,6 +54,7 @@ pub fn to_dto_receipt(receipt: &models::Receipt, items: &[models::LineItem]) -> 
         status: to_dto_status(&receipt.status),
         extraction_error: receipt.extraction_error.clone(),
         reviewed: receipt.reviewed_at.is_some(),
+        has_photo: !receipt.image_path.is_empty(),
         line_items,
     }
 }

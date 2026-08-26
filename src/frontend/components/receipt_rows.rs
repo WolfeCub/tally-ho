@@ -9,10 +9,10 @@ use crate::shared::dto::ReceiptSummary;
 #[component]
 pub fn ReceiptRows(
     rows: Vec<ReceiptSummary>,
-    /// Owned by the page, not this view: the list refetches while a receipt is
-    /// being read, and a filter that reset itself on every poll would be worse
-    /// than not having one.
-    hide_checked: RwSignal<bool>,
+    /// The page's, not this view's: the list refetches while a receipt is being
+    /// read, and a filter that reset itself on every poll would be worse than
+    /// not having one.
+    hide_checked: Signal<bool>,
 ) -> impl IntoView {
     let rows = StoredValue::new(rows);
     view! {

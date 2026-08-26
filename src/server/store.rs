@@ -89,7 +89,14 @@ impl Store {
     /// Removes a stored image. A file that has already gone is not an error —
     /// the row is on its way out either way, and leaving it behind would strand
     /// the receipt in the list.
+    ///
+    /// An empty path is a receipt that never had a photo. Joined, it would name
+    /// the store root itself, so it stops here.
     pub async fn delete(&self, relative: &str) -> Result<(), StoreError> {
+        if relative.is_empty() {
+            return Ok(());
+        }
+
         let absolute = self.absolute(relative);
         match tokio::fs::remove_file(&absolute).await {
             Ok(()) => Ok(()),

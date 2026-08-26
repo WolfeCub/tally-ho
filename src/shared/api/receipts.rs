@@ -37,13 +37,27 @@ pub async fn upload_receipt(data: MultipartData) -> Result<Uuid, ServerFnError> 
         .reported_as("could not store image")?;
 
     let mut db = state.db.clone();
-    let id = receipts::create(&mut db, &image_path, today)
+    let id = receipts::create(&mut db, Some(&image_path), today, &state.default_currency)
         .await
         .reported_as("could not create receipt")?;
 
     state.jobs.push(id);
 
     Ok(id)
+}
+
+/// Creates a blank receipt with no photo, to be typed in by hand.
+///
+/// For a receipt that was never photographed, or one whose photo is long gone.
+#[server]
+pub async fn create_manual_receipt() -> Result<Uuid, ServerFnError> {
+    let state = expect_context::<AppState>();
+    let mut db = state.db.clone();
+
+    let today = jiff::Zoned::now().date();
+    receipts::create(&mut db, None, today, &state.default_currency)
+        .await
+        .reported_as("could not create receipt")
 }
 
 /// Poll target while extraction runs.

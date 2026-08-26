@@ -2,9 +2,7 @@
 
 use leptos::prelude::*;
 
-/// Sized and shaped like the row actions rather than like a form field: these
-/// sit above a list, not in a form.
-const CHIP: &str = "min-h-11 rounded-lg border px-3 text-sm";
+use super::CHIP;
 
 /// A filter whose state reads from across the screen: on looks like the app's
 /// primary action, off like one of its plain buttons.
@@ -12,8 +10,15 @@ const CHIP: &str = "min-h-11 rounded-lg border px-3 text-sm";
 /// A `<button aria-pressed>` rather than a checkbox. There is no form to submit
 /// it with, and the browser's own checkbox is the one control on these screens
 /// that looks like the browser's instead of the app's.
+///
+/// Read and write are separate halves so the state can live wherever suits the
+/// screen — an `RwSignal`, which satisfies both, or the URL.
 #[component]
-pub fn Toggle(label: &'static str, on: RwSignal<bool>) -> impl IntoView {
+pub fn Toggle(
+    label: &'static str,
+    #[prop(into)] on: Signal<bool>,
+    #[prop(into)] set: SignalSetter<bool>,
+) -> impl IntoView {
     view! {
         <button
             type="button"
@@ -26,7 +31,7 @@ pub fn Toggle(label: &'static str, on: RwSignal<bool>) -> impl IntoView {
                 format!("{CHIP} {state}")
             }
             aria-pressed=move || on.get().to_string()
-            on:click=move |_| on.update(|on| *on = !*on)
+            on:click=move |_| set.set(!on.get_untracked())
         >
             {label}
         </button>

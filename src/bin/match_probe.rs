@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // The same currency the server would import under, read the same way.
-    let currency = state::currency_from_env()?;
+    let currency = state::default_currency_from_env()?;
     let mut db = db::connect().await?;
 
     for path in files {

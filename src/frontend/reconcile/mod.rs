@@ -4,12 +4,13 @@
 mod charge;
 
 use leptos::prelude::*;
+use leptos::web_sys::SubmitEvent;
 use uuid::Uuid;
 
 use crate::frontend::actions::{error_of, succeeded};
 use crate::frontend::components::{
-    AS_BUTTON, BUTTON, Bar, DANGER, INPUT, PRIMARY, ROW, Toggle, confirm, error_notice,
-    upload_action, uploads_to,
+    AS_BUTTON, BUTTON, Bar, DANGER, INPUT, PRIMARY, PencilIcon, ROW, Toggle, confirm, error_notice,
+    field, form_element, upload_action, uploads_to,
 };
 use crate::frontend::money::{money, money_total, shares_line};
 use crate::frontend::poll::{self, poll_until_settled};
@@ -17,8 +18,8 @@ use crate::frontend::route::id_param;
 use crate::frontend::screen;
 use crate::frontend::text::plural;
 use crate::shared::api::{
-    delete_statement, get_statement, import_statement, list_statements, resolve_charge,
-    spare_receipts, statement_reading,
+    delete_statement, get_statement, import_statement, list_statements, rename_statement,
+    resolve_charge, spare_receipts, statement_reading,
 };
 use crate::shared::dto::{Imported, ReceiptSummary, Resolve, Statement, StatementSummary};
 use charge::{ChargeRow, Shared};
@@ -229,12 +230,12 @@ fn StatementView(
     let charges = StoredValue::new(statement.charges.clone());
 
     view! {
-        <Summary statement />
+        <Summary statement reload />
 
         {move || error_notice(error_of(resolve))}
 
         <div class="mb-3 flex">
-            <Toggle label="Hide reconciled" on=hide_done />
+            <Toggle label="Hide reconciled" on=hide_done set=hide_done />
         </div>
 
         <ul class="flex flex-col gap-2">
@@ -272,9 +273,99 @@ fn StatementView(
     }
 }
 
+/// The statement's name and period, and the way to change the name.
+///
+/// Worth renaming because the name is whatever the file was called, and a card
+/// that exports `statement (3).csv` every month gives you nothing to go on.
+#[component]
+fn Label(
+    id: Uuid,
+    label: String,
+    dates: String,
+    reload: impl Fn() + Copy + Send + Sync + 'static,
+) -> impl IntoView {
+    // Read by both arms of the `Show`, which are closures and so can't consume it.
+    let label = StoredValue::new(label);
+
+    let rename = Action::new(|(id, label): &(Uuid, String)| rename_statement(*id, label.clone()));
+    let editing = RwSignal::new(false);
+
+    // No `editing.set(false)`: reloading rebuilds this component with the name it
+    // now has, so the form stays open over the save rather than flicking back to
+    // the old one and then updating.
+    Effect::new(move |_| {
+        if succeeded(rename) {
+            reload();
+        }
+    });
+
+    // Selected, not just focused: renaming is one tap, and what you type replaces
+    // the filename rather than landing next to it.
+    let name = NodeRef::<leptos::html::Input>::new();
+    Effect::new(move |_| {
+        if let Some(el) = name.get() {
+            let _ = el.focus();
+            el.select();
+        }
+    });
+
+    let submit = move |ev: SubmitEvent| {
+        ev.prevent_default();
+        rename.dispatch((id, field(&form_element(&ev), "label")));
+    };
+
+    view! {
+        {move || error_notice(error_of(rename))}
+
+        <Show
+            when=move || editing.get()
+            fallback=move || {
+                let dates = dates.clone();
+                view! {
+                    <p class="flex min-w-0 items-center gap-1.5 text-sm text-muted">
+                        <span class="truncate">{label.get_value()} " · " {dates}</span>
+                        <button
+                            type="button"
+                            class="shrink-0 p-2 active:opacity-60"
+                            aria-label="Rename statement"
+                            on:click=move |_| editing.set(true)
+                        >
+                            <PencilIcon />
+                        </button>
+                    </p>
+                }
+            }
+        >
+            <form class="mb-1 flex items-center gap-2" on:submit=submit>
+                <input
+                    node_ref=name
+                    name="label"
+                    value=move || label.get_value()
+                    class=format!("{INPUT} min-w-0 flex-1 text-sm")
+                    aria-label="Statement name"
+                />
+                <button type="submit" class=format!("{BUTTON} shrink-0 text-sm")>
+                    {move || if rename.pending().get() { "Saving…" } else { "Save" }}
+                </button>
+                <button
+                    type="button"
+                    class="shrink-0 p-2 text-muted active:opacity-60"
+                    aria-label="Cancel"
+                    on:click=move |_| editing.set(false)
+                >
+                    "✕"
+                </button>
+            </form>
+        </Show>
+    }
+}
+
 /// The figure the whole screen is for, and how far off it is.
 #[component]
-fn Summary(statement: Statement) -> impl IntoView {
+fn Summary(
+    statement: Statement,
+    reload: impl Fn() + Copy + Send + Sync + 'static,
+) -> impl IntoView {
     let currency = statement.currency.clone();
     let count = statement.charges.len();
     let done = statement.settled();
@@ -282,15 +373,13 @@ fn Summary(statement: Statement) -> impl IntoView {
     let percent = done * 100 / count.max(1);
 
     let owed = shares_line(&statement.totals(), &statement.people, &currency);
+    let dates = format!("{} – {}", statement.begins_on, statement.ends_on);
 
     view! {
         <div class="mb-4 rounded-lg border border-edge bg-surface p-4">
             <div class="sm:flex sm:items-start sm:justify-between sm:gap-4">
                 <div class="min-w-0">
-                    <p class="truncate text-sm text-muted">
-                        {statement.label.clone()} " · " {statement.begins_on.to_string()} " – "
-                        {statement.ends_on.to_string()}
-                    </p>
+                    <Label id=statement.id label=statement.label.clone() dates reload />
                     <p class="text-3xl font-semibold tabular-nums">
                         {money_total(statement.total(), &currency)}
                     </p>

@@ -30,7 +30,7 @@ one to turn the text into line items.
 | `OLLAMA_ASSIGN_MODEL` | same as `OLLAMA_MODEL` — the one that guesses whose each item is |
 | `OLLAMA_KEEP_ALIVE` | `-1m` — how long Ollama holds the models in VRAM; negative never unloads, empty leaves the server's default |
 | `MAX_IMAGE_EDGE` | `1600` — longest edge a photo is downscaled to before it's read |
-| `CURRENCY` | `USD` — the ISO code your statements are in |
+| `CURRENCY` | `CAD` — the ISO code your statements are in and the default receipt currency |
 | `DATABASE_URL` | `sqlite:./data/tally-ho.db` |
 | `DATA_DIR` | `./data` |
 

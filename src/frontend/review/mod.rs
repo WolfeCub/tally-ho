@@ -110,6 +110,7 @@ fn ReviewForm(
     let extracting = !receipt.status.is_terminal();
     let reviewed = receipt.reviewed;
     let has_total = receipt.total.is_some();
+    let has_photo = receipt.has_photo;
     let rows = RwSignal::new(Row::from_items(&receipt.line_items));
     // Nothing to guess from until somebody has been described in Settings.
     let described = people.iter().any(Person::described);
@@ -179,10 +180,11 @@ fn ReviewForm(
         <ReceiptHeading receipt=receipt.clone() />
 
         // Two columns once there's room: the photo stays put while you scroll the
-        // fields, which is the whole job of this screen. Stacked on a phone.
-        <div class="md:grid md:grid-cols-2 md:items-start md:gap-6">
+        // fields, which is the whole job of this screen. Stacked on a phone, and
+        // a single column when there's no photo to sit beside.
+        <div class=has_photo.then_some("md:grid md:grid-cols-2 md:items-start md:gap-6")>
             // The photo is the source of truth; everything else is a claim about it.
-            <ReceiptPhoto src=format!("/receipt-image/{id}") />
+            {has_photo.then(|| view! { <ReceiptPhoto src=format!("/receipt-image/{id}") /> })}
 
             // min-w-0 so long merchant names can't push the column wider than half.
             <div class="min-w-0">

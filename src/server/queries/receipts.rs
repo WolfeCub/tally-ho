@@ -141,17 +141,29 @@ async fn summaries(
 ///
 /// Deliberately minimal: everything else is unknown until extraction runs.
 /// `purchased_on` is provisionally today and `total` stays null — null means
-/// "not yet known", never zero.
+/// "not yet known", never zero. `currency` is the deployment's, which extraction
+/// overwrites if the receipt prints one of its own.
+///
+/// No image is a receipt typed in by hand, and lands `Done`: nothing is going to
+/// extract it, and a row that claims to still be reading makes every list poll
+/// forever.
 pub async fn create(
     db: &mut toasty::Db,
-    image_path: &str,
+    image_path: Option<&str>,
     today: jiff::civil::Date,
+    currency: &str,
 ) -> toasty::Result<uuid::Uuid> {
+    let status = match image_path {
+        Some(_) => models::ExtractionStatus::Pending,
+        None => models::ExtractionStatus::Done,
+    };
+
     let receipt = toasty::create!(models::Receipt {
         purchased_on: today,
         merchant: "",
-        currency: "USD",
-        image_path: image_path,
+        currency: currency,
+        image_path: image_path.unwrap_or_default(),
+        status: status,
     })
     .exec(db)
     .await?;
@@ -341,6 +353,7 @@ mod tests {
     use crate::server::mappers;
     use crate::server::models::{ExtractionStatus, LineItem, Receipt};
     use crate::server::testing::memory_db;
+    use crate::shared::dto;
     use crate::shared::testing::dec;
 
     /// Exercises the range matching searches through, against real SQLite: the
@@ -421,6 +434,25 @@ mod tests {
             summaries[1].problems
         );
         assert_eq!(summaries[0].problems.len(), 1);
+    }
+
+    /// Nothing is ever going to extract a hand-typed receipt, so it has to land
+    /// finished. `Pending` would leave every list polling for a job that doesn't
+    /// exist, and the review screen waiting on it.
+    #[tokio::test]
+    async fn a_manual_receipt_lands_finished_and_photoless() {
+        let mut db = memory_db().await;
+
+        let id = super::create(&mut db, None, jiff::civil::date(2026, 7, 20), "CAD")
+            .await
+            .unwrap();
+
+        let receipt = super::load(&mut db, id).await.unwrap().unwrap();
+        assert_eq!(receipt.status, dto::ExtractionStatus::Done);
+        assert!(!receipt.has_photo);
+        assert_eq!(receipt.currency, "CAD");
+        // Null, not zero: nobody has said what this cost yet.
+        assert!(receipt.total.is_none());
     }
 
     /// The line items are the part that can be left behind: nothing cascades,

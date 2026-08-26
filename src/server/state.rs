@@ -7,7 +7,7 @@ use super::extract::{Config, OllamaExtractor, ReceiptExtractor};
 use super::job;
 use super::store::Store;
 
-const DEFAULT_CURRENCY: &str = "USD";
+const DEFAULT_CURRENCY: &str = "CAD";
 
 /// Cheap to clone: `toasty::Db` is an `Arc` over a shared pool, and the other
 /// two are behind `Arc`. Every request clones this because toasty queries take
@@ -25,22 +25,22 @@ pub struct AppState {
     /// Where an upload hands its receipt off to be read, one at a time.
     pub jobs: job::Queue,
     /// The ISO code imported statements are in, and what a receipt is taken to
-    /// be in when it doesn't print one. One card, one currency — so it's
+    /// be in until something says otherwise. One card, one currency — so it's
     /// deployment config rather than a question on every upload.
-    pub currency: String,
+    pub default_currency: String,
 }
 
 impl AppState {
     pub async fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
         let config = Config::from_env();
         let assigning = assign::Config::from_extraction(&config);
-        let currency = currency_from_env()?;
+        let default_currency = default_currency_from_env()?;
         tracing::info!(
             model = %config.label(),
             url = %config.url,
             max_image_edge = config.max_image_edge,
             ocr_context = config.ocr_context,
-            %currency,
+            %default_currency,
             "extraction configured"
         );
         tracing::info!(model = %assigning.model, "assignment configured");
@@ -52,7 +52,7 @@ impl AppState {
             assigner: Arc::new(OllamaAssigner::new(assigning)?),
             store: Arc::new(Store::from_env()),
             jobs,
-            currency,
+            default_currency,
         };
 
         // Started here rather than by the caller, so there's no way to hold a
@@ -68,14 +68,14 @@ impl AppState {
 ///
 /// Public for `match_probe`, which has to read the currency the same way the
 /// server does or it answers for a statement nobody would have imported.
-pub fn currency_from_env() -> Result<String, Box<dyn std::error::Error>> {
+pub fn default_currency_from_env() -> Result<String, Box<dyn std::error::Error>> {
     let code = crate::server::env::string("CURRENCY", DEFAULT_CURRENCY)
         .trim()
         .to_uppercase();
 
     if iso_currency::Currency::from_code(&code).is_none() {
         return Err(
-            format!("CURRENCY={code:?} isn't an ISO currency code — try USD or CAD").into(),
+            format!("CURRENCY={code:?} isn't an ISO currency code — try CAD or USD").into(),
         );
     }
     Ok(code)

@@ -261,6 +261,19 @@ pub async fn reading(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<bool> {
         .any(|r| matched.contains(&r.id) && !mappers::to_dto_status(&r.status).is_terminal()))
 }
 
+/// Renames a statement. The label is only ever shown, so anything non-empty
+/// goes.
+pub async fn rename(db: &mut toasty::Db, id: Uuid, label: &str) -> anyhow::Result<()> {
+    let label = label.trim();
+    if label.is_empty() {
+        anyhow::bail!("a statement needs a name");
+    }
+
+    let mut statement = models::Statement::get_by_id(db, &id).await?;
+    toasty::update!(statement { label: label }).exec(db).await?;
+    Ok(())
+}
+
 /// Throws away a statement and its charges.
 ///
 /// Receipts are left alone: they're evidence of a purchase, not part of the file
@@ -681,5 +694,23 @@ mod tests {
             dto::Resolution::Unresolved
         ));
         assert_eq!(statement.settled(), 0);
+    }
+
+    /// The label is the only thing telling two `statement (3).csv` apart, so a
+    /// rename that blanked one would lose the only way to tell.
+    #[tokio::test]
+    async fn renaming_a_statement_refuses_to_leave_it_nameless() {
+        let mut db = memory_db().await;
+        let id = imported(&mut db, "statement (3).csv", CSV).await;
+
+        rename(&mut db, id, "  July 2026 Visa  ").await.unwrap();
+        assert_eq!(list(&mut db).await.unwrap()[0].label, "July 2026 Visa");
+
+        assert!(rename(&mut db, id, "   ").await.is_err());
+        assert_eq!(
+            list(&mut db).await.unwrap()[0].label,
+            "July 2026 Visa",
+            "a refused rename must leave the old name alone"
+        );
     }
 }

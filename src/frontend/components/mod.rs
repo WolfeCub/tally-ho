@@ -13,7 +13,7 @@ mod toggle;
 
 pub use bar::Bar;
 pub use form::{LabeledInput, confirm, field, form_element, upload_action, uploads_to};
-pub use icons::{CameraIcon, Spinner, Verdict};
+pub use icons::{CameraIcon, PencilIcon, Spinner, Verdict};
 pub use notice::{Notice, Tone, error_notice, failed, loading};
 pub use photo::ReceiptPhoto;
 pub use picker::FuzzyPick;
@@ -33,6 +33,9 @@ pub const PRIMARY: &str = "min-h-11 rounded-lg bg-paper px-4 py-3 font-medium te
 /// Not undoable, so it shouldn't look like the way out.
 pub const DANGER: &str = "min-h-11 rounded-lg border border-danger px-4 py-3 text-danger \
                           disabled:opacity-40";
+/// For the row above a list: the filters and whatever sits beside them. Colours
+/// are the caller's, since a filter says which way it's set with them.
+pub const CHIP: &str = "min-h-11 rounded-lg border px-3 text-sm";
 /// A tappable row in a list: a receipt, a statement.
 pub const ROW: &str = "flex min-h-14 items-center gap-3 rounded-lg border border-edge bg-surface \
                        p-3 no-underline active:bg-edge";

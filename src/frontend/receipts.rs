@@ -2,10 +2,11 @@
 
 use leptos::prelude::*;
 
-use crate::frontend::components::{ReceiptRows, Toggle};
+use crate::frontend::actions::error_of;
+use crate::frontend::components::{CHIP, ReceiptRows, Toggle, error_notice};
 use crate::frontend::poll::poll_while;
 use crate::frontend::screen;
-use crate::shared::api::recent_receipts;
+use crate::shared::api::{create_manual_receipt, recent_receipts};
 
 #[component]
 pub fn ReceiptListPage() -> impl IntoView {
@@ -29,14 +30,48 @@ pub fn ReceiptListPage() -> impl IntoView {
 
     poll_while(tick, move || waiting.get());
 
-    // Held here rather than in the list, which is rebuilt on every poll.
-    let hide_checked = RwSignal::new(false);
+    // In the URL, because opening a receipt tears this page down and a plain
+    // signal would go with it. `replace` so the back button doesn't have to undo
+    // a filter.
+    let (hidden, set_hidden) = leptos_router::hooks::query_signal_with_options::<bool>(
+        "hide_checked",
+        leptos_router::NavigateOptions {
+            replace: true,
+            ..Default::default()
+        },
+    );
+    let hide_checked = Signal::derive(move || hidden.get().unwrap_or(false));
+
+    let blank = Action::new(|(): &()| create_manual_receipt());
+    let navigate = leptos_router::hooks::use_navigate();
+    Effect::new(move |_| {
+        if let Some(Ok(id)) = blank.value().get() {
+            navigate(&format!("/receipt/{id}"), Default::default());
+        }
+    });
 
     view! {
         <h1 class="mb-4 text-xl font-semibold">"Receipts"</h1>
 
-        <div class="mb-3 flex">
-            <Toggle label="Hide checked" on=hide_checked />
+        {move || error_notice(error_of(blank))}
+
+        <div class="mb-3 flex items-center justify-between gap-3">
+            <Toggle
+                label="Hide checked"
+                on=hide_checked
+                // `None` when it's off, so the parameter isn't in the URL at all.
+                set=SignalSetter::map(move |on: bool| set_hidden.set(on.then_some(true)))
+            />
+            <button
+                type="button"
+                class=format!("{CHIP} border-edge bg-surface active:bg-edge disabled:opacity-40")
+                disabled=move || blank.pending().get()
+                on:click=move |_| {
+                    blank.dispatch(());
+                }
+            >
+                {move || if blank.pending().get() { "Adding…" } else { "New receipt" }}
+            </button>
         </div>
 
         {screen::listing(

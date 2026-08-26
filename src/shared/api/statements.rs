@@ -37,7 +37,7 @@ pub async fn import_statement(data: MultipartData) -> Result<dto::Imported, Serv
     let parsed = statement_csv::charges(&bytes).reported()?;
 
     let mut db = state.db.clone();
-    let id = statements::import(&mut db, &label, &state.currency, &parsed)
+    let id = statements::import(&mut db, &label, &state.default_currency, &parsed)
         .await
         .reported_as("could not import the statement")?;
 
@@ -98,6 +98,12 @@ pub async fn spare_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, Se
     receipts::spare(&mut db(), limit)
         .await
         .reported_as("could not load receipts")
+}
+
+/// Renames a statement, so a list of `statement (3).csv` can be told apart.
+#[server]
+pub async fn rename_statement(id: Uuid, label: String) -> Result<(), ServerFnError> {
+    statements::rename(&mut db(), id, &label).await.reported()
 }
 
 /// Throws away a statement and its charges. The receipts stay.
