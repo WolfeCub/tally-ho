@@ -73,6 +73,7 @@ pub fn charge(description: &str, amount: &str, resolution: Resolution) -> Charge
         suggestions: Vec::new(),
         refundable: Vec::new(),
         came_back: Decimal::ZERO,
+        details: Vec::new(),
     }
 }
 

@@ -13,7 +13,7 @@ mod toggle;
 
 pub use bar::Bar;
 pub use form::{LabeledInput, confirm, field, form_element, upload_action, uploads_to};
-pub use icons::{CameraIcon, PencilIcon, Spinner, Verdict};
+pub use icons::{CameraIcon, InfoIcon, PencilIcon, Spinner, Verdict};
 pub use notice::{Notice, Tone, error_notice, failed, loading};
 pub use photo::ReceiptPhoto;
 pub use picker::FuzzyPick;

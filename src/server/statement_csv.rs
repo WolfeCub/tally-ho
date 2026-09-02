@@ -47,6 +47,8 @@ pub struct ParsedCharge {
     pub description: String,
     /// Positive for a purchase, negative for a refund.
     pub amount: Decimal,
+    /// Whatever else the row said, by column name. Blank cells are left out.
+    pub details: Vec<(String, String)>,
 }
 
 /// A column the sniffer picked: where it is, and what the file called it.
@@ -79,22 +81,41 @@ impl Column {
     }
 }
 
-/// The three columns a statement is read through.
+/// The three columns a statement is read through, and everything else it has.
 #[derive(Debug)]
 pub struct Layout {
     pub date: Column,
     pub description: Column,
     pub amount: Column,
+    /// Every other named column, in file order.
+    others: Vec<Column>,
 }
 
 impl Layout {
     /// `None` when this row isn't the header, which is how the account details
     /// at the top of a file get skipped.
     fn sniff(row: &csv::StringRecord) -> Option<Self> {
+        let date = Column::find(row, DATE)?;
+        let description = Column::find(row, DESCRIPTION)?;
+        let amount = Column::find(row, AMOUNT)?;
+
+        let read = [date.index, description.index, amount.index];
+        let others = row
+            .iter()
+            .enumerate()
+            // An unnamed column has nothing to label its values with.
+            .filter(|(index, header)| !read.contains(index) && !header.trim().is_empty())
+            .map(|(index, header)| Column {
+                index,
+                name: header.trim().to_string(),
+            })
+            .collect();
+
         Some(Self {
-            date: Column::find(row, DATE)?,
-            description: Column::find(row, DESCRIPTION)?,
-            amount: Column::find(row, AMOUNT)?,
+            date,
+            description,
+            amount,
+            others,
         })
     }
 
@@ -108,15 +129,20 @@ impl Layout {
             amount: parse::money(amount)
                 .filter(|a| !a.is_zero())
                 .ok_or_else(|| format!("no amount in {amount:?}"))?,
-            // Statements pad descriptions out with runs of spaces.
-            description: self
-                .description
-                .read(row)
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" "),
+            description: tidy(self.description.read(row)),
+            details: self
+                .others
+                .iter()
+                .map(|column| (column.name.clone(), tidy(column.read(row))))
+                .filter(|(_, value)| !value.is_empty())
+                .collect(),
         })
     }
+}
+
+/// Statements pad their columns out with runs of spaces.
+fn tidy(cell: &str) -> String {
+    cell.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[derive(Debug)]

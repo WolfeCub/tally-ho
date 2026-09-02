@@ -159,11 +159,12 @@ Fields:
 - merchant: the store name, e.g. Walmart.
 - purchased_on: the transaction date copied EXACTLY as printed, character for \
 character, e.g. 08/12/21. Do not convert, reorder or reformat it.
-- currency: the ISO code, e.g. USD. The one field to work out rather than copy, \
-so the rule above about guessing does not apply to it: the address, the phone \
-number and the name of the tax charged say which country the receipt was printed \
-in, and the country says which currency. A dollar sign on its own settles \
-nothing, since plenty of countries write their money with one.
+- currency: the ISO code, e.g. CAD. The one field to work out rather than copy: \
+the address, the phone number and the name of the tax charged say which country \
+the receipt was printed in, and the country says which currency. A dollar sign on \
+its own settles nothing, since plenty of countries write their money with one. \
+With nothing on the receipt to say which country, the answer is null rather than \
+the code you see most often.
 - subtotal: the amount printed as SUBTOTAL.
 - tax: the total tax amount printed.
 - total: the final amount charged, printed as TOTAL.

@@ -6,12 +6,13 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::frontend::actions::error_of;
-use crate::frontend::components::{FuzzyPick, INPUT, Spinner, upload_action};
+use crate::frontend::components::{FuzzyPick, INPUT, InfoIcon, Spinner, confirm, upload_action};
 use crate::frontend::money::{money, shares_line};
 use crate::frontend::text::{merchant, plural, total_or_why};
 use crate::shared::api::upload_receipt;
 use crate::shared::dto::{
-    Candidate, Charge, Matched, Person, ReceiptSummary, Refundable, Resolution, Resolve, Share,
+    Candidate, Charge, Detail, Matched, Person, ReceiptSummary, Refundable, Resolution, Resolve,
+    Share,
 };
 
 /// A row action. Narrower than a full [`crate::frontend::components::BUTTON`] so
@@ -49,6 +50,7 @@ pub fn ChargeRow(
     charge: Charge,
     shared: Shared,
     resolve: impl Fn(Uuid, Resolve) + Copy + Send + Sync + 'static,
+    remove: impl Fn(Uuid) + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
     // A settled row is done with; anything else is still work, and says so from
     // across the screen.
@@ -58,14 +60,39 @@ pub fn ChargeRow(
         "border-good"
     };
 
+    let id = charge.id;
+    let question = format!(
+        "Delete \"{}\"? It comes off the statement total and cannot be undone.",
+        charge.description,
+    );
+
     view! {
+        // The details panel hangs off this line rather than off the dot, so it
+        // can't run off the side of a phone.
         <li class=format!("rounded-lg border {edge} bg-surface p-3")>
-            <div class="flex items-baseline gap-2">
+            <div class="relative flex items-baseline gap-2">
                 <span class="shrink-0 text-xs text-muted tabular-nums">
                     {format!("{:02}/{:02}", charge.charged_on.month(), charge.charged_on.day())}
                 </span>
-                <span class="min-w-0 flex-1 truncate">{charge.description.clone()}</span>
+                <span class="flex min-w-0 flex-1 items-center gap-1">
+                    <span class="min-w-0 truncate">{charge.description.clone()}</span>
+                    {(!charge.details.is_empty())
+                        .then(|| view! { <Details details=charge.details.clone() /> })}
+                </span>
                 <span class="shrink-0 tabular-nums">{shared.money(charge.amount)}</span>
+                // Last, out of the way of the row's own answers.
+                <button
+                    type="button"
+                    class="-my-1 shrink-0 p-2 text-muted active:opacity-60"
+                    aria-label="Delete this charge"
+                    on:click=move |_| {
+                        if confirm(&question) {
+                            remove(id);
+                        }
+                    }
+                >
+                    "✕"
+                </button>
             </div>
 
             // On the purchase, because the refund is usually on the next
@@ -80,6 +107,52 @@ pub fn ChargeRow(
                 })}
             <ChargeBody charge shared resolve />
         </li>
+    }
+}
+
+/// The rest of what the statement said about this row: the cardholder, the
+/// category, the date it posted.
+///
+/// Behind a dot because a column of it would bury the date, the description and
+/// the amount. Hover opens it, and so does a tap, which also pins it.
+#[component]
+fn Details(details: Vec<Detail>) -> impl IntoView {
+    let open = RwSignal::new(false);
+
+    view! {
+        <span class="group shrink-0">
+            <button
+                type="button"
+                class="-my-1 p-1 text-muted active:opacity-60"
+                aria-label="What else the statement said"
+                aria-expanded=move || open.get().to_string()
+                on:click=move |_| open.update(|open| *open = !*open)
+            >
+                <InfoIcon />
+            </button>
+
+            // `hidden` and `block` are both toggled because they have the same
+            // specificity, so a static one would leave it to stylesheet order.
+            // `group-hover:block` outranks both, whichever way a tap left it.
+            <span
+                class="absolute top-full left-0 z-10 mt-1 w-max max-w-full rounded-lg border \
+                border-edge bg-surface p-2 text-left text-xs shadow-lg group-hover:block"
+                class=("hidden", move || !open.get())
+                class=("block", move || open.get())
+            >
+                {details
+                    .into_iter()
+                    .map(|detail| {
+                        view! {
+                            <span class="flex justify-between gap-3 py-0.5">
+                                <span class="shrink-0 text-muted">{detail.name}</span>
+                                <span class="min-w-0 text-right">{detail.value}</span>
+                            </span>
+                        }
+                    })
+                    .collect_view()}
+            </span>
+        </span>
     }
 }
 

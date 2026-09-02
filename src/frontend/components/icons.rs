@@ -42,6 +42,23 @@ pub fn Verdict(ok: bool, #[prop(optional, into)] class: String) -> impl IntoView
 }
 
 #[component]
+pub fn InfoIcon(#[prop(optional, into)] class: String) -> impl IntoView {
+    view! {
+        <svg
+            class=format!("size-4 shrink-0 {class}")
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            aria-hidden="true"
+        >
+            <circle cx="12" cy="12" r="9" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 11.25v4.5m0-7.5h.01" />
+        </svg>
+    }
+}
+
+#[component]
 pub fn PencilIcon(#[prop(optional, into)] class: String) -> impl IntoView {
     view! {
         <svg

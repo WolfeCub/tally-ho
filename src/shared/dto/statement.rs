@@ -135,6 +135,14 @@ pub enum Resolve {
     Clear,
 }
 
+/// A column off the statement the app doesn't read: the cardholder, the
+/// category, the date it posted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Detail {
+    pub name: String,
+    pub value: String,
+}
+
 /// What one person owes for one charge.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Share {
@@ -159,6 +167,8 @@ pub struct Charge {
     /// What the refunds pointing here add up to — negative, and zero for the
     /// charges nothing has come back off.
     pub came_back: Decimal,
+    /// The rest of what the file said about this row, in its column order.
+    pub details: Vec<Detail>,
     /// What each person owes, in [`Statement::people`] order. Empty while
     /// nothing accounts for the charge.
     ///

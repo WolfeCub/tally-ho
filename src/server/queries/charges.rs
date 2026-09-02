@@ -54,6 +54,27 @@ pub async fn resolve(
     Ok(())
 }
 
+/// Throws away one charge: a payment to the card, a row the file repeated.
+///
+/// The receipt stays. Nothing cascades, so a refund pointing at this charge is
+/// unhooked first rather than left naming a purchase that isn't there.
+pub async fn delete(db: &mut toasty::Db, charge_id: Uuid) -> toasty::Result<()> {
+    let mut tx = db.transaction().await?;
+
+    let charge = models::Charge::get_by_id(&mut tx, &charge_id).await?;
+    let refunds = models::Charge::fields().refunds_charge_id().eq(charge_id);
+    for mut refund in models::Charge::filter(refunds).exec(&mut tx).await? {
+        toasty::update!(refund {
+            refunds_charge_id: None
+        })
+        .exec(&mut tx)
+        .await?;
+    }
+    charge.delete().exec(&mut tx).await?;
+
+    tx.commit().await
+}
+
 /// Receipts already accounted for by a charge, on this statement or any other.
 ///
 /// Every charge rather than a filtered query: toasty has no "is not null", and a

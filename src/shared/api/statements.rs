@@ -90,6 +90,16 @@ pub async fn resolve_charge(charge_id: Uuid, how: dto::Resolve) -> Result<(), Se
     charges::resolve(&mut db(), charge_id, how).await.reported()
 }
 
+/// Throws away one charge. The statement and the receipts stay.
+#[server]
+pub async fn delete_charge(charge_id: Uuid) -> Result<(), ServerFnError> {
+    use crate::server::queries::charges;
+
+    charges::delete(&mut db(), charge_id)
+        .await
+        .reported_as("could not delete the charge")
+}
+
 /// Receipts nothing accounts for yet, for picking one by hand.
 #[server]
 pub async fn spare_receipts(limit: usize) -> Result<Vec<dto::ReceiptSummary>, ServerFnError> {

@@ -102,6 +102,7 @@ pub async fn import(
             amount: charge.amount,
             position: position as i64,
             receipt_id: proposed,
+            details: (!charge.details.is_empty()).then(|| toasty::Json(charge.details.clone())),
         })
         .exec(&mut tx)
         .await?;
@@ -221,6 +222,7 @@ pub async fn load(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<dto::Statemen
                 Vec::new()
             },
             came_back: came_back(row.id, &card),
+            details: details_of(row),
             resolution,
             split,
         });
@@ -326,6 +328,19 @@ fn refundable(
             charged_on: purchase.charged_on,
             description: purchase.description.clone(),
             amount: purchase.amount,
+        })
+        .collect()
+}
+
+/// Empty for a charge imported before there was anywhere to keep these.
+fn details_of(charge: &models::Charge) -> Vec<dto::Detail> {
+    charge
+        .details
+        .iter()
+        .flat_map(|details| details.iter())
+        .map(|(name, value)| dto::Detail {
+            name: name.clone(),
+            value: value.clone(),
         })
         .collect()
 }

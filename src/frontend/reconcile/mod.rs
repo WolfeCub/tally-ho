@@ -7,7 +7,7 @@ use leptos::prelude::*;
 use leptos::web_sys::SubmitEvent;
 use uuid::Uuid;
 
-use crate::frontend::actions::{error_of, succeeded};
+use crate::frontend::actions::{error_of, first_error, succeeded};
 use crate::frontend::components::{
     AS_BUTTON, BUTTON, Bar, DANGER, INPUT, PRIMARY, PencilIcon, ROW, Toggle, confirm, error_notice,
     field, form_element, upload_action, uploads_to,
@@ -18,8 +18,8 @@ use crate::frontend::route::id_param;
 use crate::frontend::screen;
 use crate::frontend::text::plural;
 use crate::shared::api::{
-    delete_statement, get_statement, import_statement, list_statements, rename_statement,
-    resolve_charge, spare_receipts, statement_reading,
+    delete_charge, delete_statement, get_statement, import_statement, list_statements,
+    rename_statement, resolve_charge, spare_receipts, statement_reading,
 };
 use crate::shared::dto::{Imported, ReceiptSummary, Resolve, Statement, StatementSummary};
 use charge::{ChargeRow, Shared};
@@ -205,10 +205,11 @@ fn StatementView(
 ) -> impl IntoView {
     let id = statement.id;
     let resolve = Action::new(|&(charge_id, how): &(Uuid, Resolve)| resolve_charge(charge_id, how));
+    let remove = Action::new(|charge_id: &Uuid| delete_charge(*charge_id));
     let discard = Action::new(|id: &Uuid| delete_statement(*id));
 
     Effect::new(move |_| {
-        if succeeded(resolve) {
+        if succeeded(resolve) || succeeded(remove) {
             reload();
         }
     });
@@ -232,7 +233,7 @@ fn StatementView(
     view! {
         <Summary statement reload />
 
-        {move || error_notice(error_of(resolve))}
+        {move || error_notice(first_error([error_of(resolve), error_of(remove)]))}
 
         <div class="mb-3 flex">
             <Toggle label="Hide reconciled" on=hide_done set=hide_done />
@@ -251,6 +252,9 @@ fn StatementView(
                                 shared
                                 resolve=move |charge_id, how| {
                                     resolve.dispatch((charge_id, how));
+                                }
+                                remove=move |charge_id| {
+                                    remove.dispatch(charge_id);
                                 }
                             />
                         }

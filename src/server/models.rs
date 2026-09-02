@@ -134,6 +134,12 @@ pub struct Charge {
     /// Row order in the file, so the screen reads like the statement.
     pub position: i64,
 
+    /// The columns the app doesn't read: the cardholder, the category, the date
+    /// it posted. Kept because the file isn't, and they say which charge you're
+    /// looking at when the description doesn't. Never queried, only shown.
+    #[column(type = text)]
+    pub details: Option<toasty::Json<Vec<(String, String)>>>,
+
     /// The receipt this charge is accounted for by. Indexed because matching
     /// asks whether a receipt is already spoken for.
     #[index]
