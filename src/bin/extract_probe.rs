@@ -1,5 +1,5 @@
 //! Standalone extraction probe. Run this against real receipt photos before
-//! wiring any UI — it is the fastest way to find out whether a given Ollama
+//! wiring any UI: it is the fastest way to find out whether a given Ollama
 //! model is good enough, and to iterate on the prompt.
 //!
 //!   OLLAMA_URL=http://host.orb.internal:11434 \
@@ -12,9 +12,10 @@
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use rust_decimal::Decimal;
     use tally_ho::server::ask;
     use tally_ho::server::extract::{Config, ExtractedReceipt, OllamaExtractor, ReceiptExtractor};
+    use tally_ho::shared::dto::LineItem;
+    use tally_ho::shared::problems::{line_item_sum, problems_of};
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -24,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let paths: Vec<String> = std::env::args().skip(1).collect();
     if paths.is_empty() {
-        eprintln!("usage: extract_probe <image> [image...]");
+        eprintln!("usage: extract_probe <image|pdf> [image|pdf...]");
         eprintln!("       extract_probe --schema   # dump the JSON schema sent to Ollama");
         std::process::exit(2);
     }
@@ -38,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let config = Config::from_env();
+    let config = Config::load().await;
     println!(
         "model={} url={} max_edge={} ocr_context={} keep_alive={}\n",
         config.label(),
@@ -67,9 +68,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let n = extraction.receipt.normalize();
 
         // First, so a wrong item can be read straight off against the fields
-        // below it: wrong here is the photo misread, wrong only below is the
+        // below it, wrong here is the photo misread, wrong only below is the
         // structuring.
-        if let Some(transcript) = &extraction.ocr_transcript {
+        if let Some(transcript) = &extraction.source_text {
             println!("  transcript:");
             for line in transcript.lines() {
                 println!("    | {line}");
@@ -98,64 +99,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
-        // A receipt gives two *independent* equations, and checking both
-        // separates the failure modes: a dropped or hallucinated line item
-        // breaks the first, a misread money field breaks the second. Checking
-        // only items-vs-total would let a compensating pair of errors pass.
-        let sum: Decimal = n.line_items.iter().filter_map(|i| i.total).sum();
-        println!("  item sum:  {sum}");
+        // The app's own checks, so this says what the review screen will say
+        // about the same receipt. An amount that couldn't be read is stored as
+        // zero here too, which is what makes the zero-item warning match.
+        let items: Vec<LineItem> = n
+            .line_items
+            .iter()
+            .enumerate()
+            .map(|(position, item)| LineItem {
+                id: uuid::Uuid::nil(),
+                description: item.description.clone(),
+                quantity: item.quantity,
+                unit_price: item.unit_price,
+                total: item.total.unwrap_or_default(),
+                position: position as i64,
+                edited: false,
+                person_id: None,
+                guessed_why: None,
+            })
+            .collect();
 
-        // 1. line items should reconstruct the subtotal (pre-tax).
-        match n.subtotal {
-            Some(subtotal) if (subtotal - sum).is_zero() => {
-                println!("  CHECK 1:   items == subtotal ({subtotal})");
-            }
-            Some(subtotal) => {
-                println!(
-                    "  CHECK 1:   MISMATCH items {sum} != subtotal {subtotal} \
-                     (diff {})",
-                    subtotal - sum
-                );
-                failures += 1;
-            }
-            None => {
-                // Fall back to comparing against the total, which is all we can
-                // do when no subtotal was printed or read.
-                match n.total {
-                    Some(total) if (total - sum).is_zero() => {
-                        println!("  CHECK 1:   no subtotal; items == total ({total})");
-                    }
-                    Some(total) => {
-                        println!("  CHECK 1:   no subtotal; items {sum} != total {total}");
-                        failures += 1;
-                    }
-                    None => {
-                        println!("  CHECK 1:   no subtotal and no total extracted");
-                        failures += 1;
-                    }
-                }
-            }
-        }
+        println!("  item sum:  {}", line_item_sum(&items));
 
-        // 2. subtotal + tax should equal the amount actually charged.
-        match (n.subtotal, n.tax, n.total) {
-            (Some(sub), Some(tax), Some(total)) if (sub + tax - total).is_zero() => {
-                println!("  CHECK 2:   subtotal + tax == total ({sub} + {tax} = {total})");
+        let problems = problems_of(n.subtotal, n.tax, n.total, &items);
+        if problems.is_empty() {
+            println!("  problems:  none");
+        } else {
+            println!("  problems:");
+            for problem in &problems {
+                println!("    - {problem}");
             }
-            (Some(sub), Some(tax), Some(total)) => {
-                println!(
-                    "  CHECK 2:   MISMATCH {sub} + {tax} != {total} (diff {})",
-                    sub + tax - total
-                );
-                failures += 1;
-            }
-            (sub, tax, total) => {
-                println!(
-                    "  CHECK 2:   incomplete money fields (subtotal={sub:?} tax={tax:?} \
-                     total={total:?})"
-                );
-                failures += 1;
-            }
+            failures += problems.len();
         }
 
         if !n.warnings.is_empty() {
@@ -168,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if failures > 0 {
-        println!("{failures} check(s) failed across {} image(s)", paths.len());
+        println!("{failures} problem(s) across {} file(s)", paths.len());
     }
     Ok(())
 }

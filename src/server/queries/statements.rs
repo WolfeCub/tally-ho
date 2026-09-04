@@ -123,12 +123,12 @@ pub async fn load(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<dto::Statemen
     let free = pool(db, statement.begins_on, statement.ends_on).await?;
 
     // A refund points at the purchase it came off, which is usually on the
-    // statement before this one — so the whole card is needed, both to look that
+    // statement before this one, so the whole card is needed, both to look that
     // purchase up and to find the refunds pointing back at these charges.
     let card = super::charges::by_id(db).await?;
 
     // A matched receipt is deliberately absent from `free`, and may be outside
-    // the window anyway if it was attached by hand — so they're fetched here,
+    // the window anyway if it was attached by hand, so they're fetched here,
     // all at once. One query each would be two per charge, on a screen that
     // reloads the whole statement after every decision. The purchases behind any
     // refunds come along too: their items are what the refund is matched to.
@@ -242,7 +242,7 @@ pub async fn load(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<dto::Statemen
 /// Whether a receipt any of these charges points at is still being read.
 ///
 /// The reconcile screen's poll target, and two queries rather than the whole
-/// statement — which is a receipt and its line items per charge, and would
+/// statement, which is a receipt and its line items per charge, and would
 /// rebuild every row on screen each time it landed.
 pub async fn reading(db: &mut toasty::Db, id: Uuid) -> anyhow::Result<bool> {
     let statement = models::Statement::get_by_id(db, &id).await?;
@@ -487,7 +487,7 @@ mod tests {
         assert_eq!(statement.settled(), 0);
         assert_eq!(statement.outstanding(), (2, dec("53.35")));
 
-        // The split shows anyway — it's what you're agreeing to — with the tax
+        // The split shows anyway, since it's what you're agreeing to: with the tax
         // carried onto the people who incurred it. People come in name order, so
         // Ash first.
         let owed: Vec<_> = proposed.split.iter().map(|s| s.amount).collect();
@@ -548,7 +548,7 @@ mod tests {
             .await
             .unwrap();
 
-        // No receipt of its own to match, but the purchases are offered — the
+        // No receipt of its own to match, but the purchases are offered: the
         // one the line names first.
         let statement = load(&mut db, august).await.unwrap();
         let refund = &statement.charges[0];
@@ -576,7 +576,7 @@ mod tests {
         assert_eq!(owed, [dec("-13.81"), dec("0.00")]);
         assert_eq!(owed.iter().sum::<Decimal>(), statement.total());
 
-        // And it shows on the purchase, which is the only place you'd see it —
+        // And it shows on the purchase, which is the only place you'd see it:
         // the refund itself is on a statement you aren't looking at.
         let july = load(&mut db, july).await.unwrap();
         assert_eq!(july.charges[0].came_back, dec("-13.81"));
@@ -670,7 +670,7 @@ mod tests {
         assert!(!reading(&mut db, id).await.unwrap());
 
         // Somebody else's receipt, mid-extraction, accounts for none of these
-        // charges — and must not keep this statement polling for ever.
+        // charges, and must not keep this statement polling for ever.
         toasty::create!(Receipt {
             purchased_on: jiff::civil::date(2026, 7, 9),
             merchant: "Elsewhere",

@@ -17,7 +17,7 @@ pub fn loading() -> impl IntoView {
     view! { <p class="text-muted">"Loading…"</p> }
 }
 
-/// Shown instead of the content, when there isn't going to be any — a failed
+/// Shown instead of the content, when there isn't going to be any: a failed
 /// load, or a URL naming something that isn't there.
 pub fn failed(why: impl ToString) -> AnyView {
     view! { <p class="text-danger">{why.to_string()}</p> }.into_any()
@@ -42,4 +42,23 @@ pub fn Notice(tone: Tone, children: Children) -> impl IntoView {
         Tone::Quiet => "mb-4 rounded-lg border border-edge p-3 text-sm text-muted",
     };
     view! { <div class=class>{children()}</div> }
+}
+
+/// Several things wrong at once, listed rather than counted: each one has to be
+/// acted on separately, and "3 problems" doesn't say which three.
+///
+/// Nothing is drawn when there is nothing wrong, so callers can hand over an
+/// empty list without guarding it.
+#[component]
+pub fn Problems(heading: &'static str, items: Vec<String>) -> impl IntoView {
+    (!items.is_empty()).then(|| {
+        view! {
+            <Notice tone=Tone::Bad>
+                <p class="mb-2 font-semibold">{heading}</p>
+                <ul class="list-disc pl-5 text-sm">
+                    {items.into_iter().map(|item| view! { <li>{item}</li> }).collect_view()}
+                </ul>
+            </Notice>
+        }
+    })
 }

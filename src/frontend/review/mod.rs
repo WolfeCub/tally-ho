@@ -1,6 +1,6 @@
 //! Check what the model read against the photo, and fix it.
 //!
-//! The screen the whole app hinges on — a local model will misread thermal
+//! The screen the whole app hinges on: a local model will misread thermal
 //! receipts, so this is only trustworthy if correcting one is quick.
 
 mod items;
@@ -12,8 +12,8 @@ use uuid::Uuid;
 
 use crate::frontend::actions::{error_of, first_error, succeeded};
 use crate::frontend::components::{
-    BUTTON, DANGER, LabeledInput, Notice, PRIMARY, ReceiptPhoto, Spinner, Tone, confirm,
-    error_notice, field, form_element,
+    BUTTON, DANGER, LabeledInput, Notice, PRIMARY, Problems, ReceiptDocument, Spinner, Tone,
+    confirm, error_notice, field, form_element,
 };
 use crate::frontend::poll::{extraction_status, poll_until_settled};
 use crate::frontend::route::id_param;
@@ -35,7 +35,7 @@ pub fn ReviewPage() -> impl IntoView {
     let id = id_param();
 
     // Set when you got here from a statement, so there's a way back to one
-    // half-reconciled. A path only — a query parameter shouldn't be able to point
+    // half-reconciled. A path only: a query parameter shouldn't be able to point
     // the link anywhere else.
     let query = leptos_router::hooks::use_query_map();
     let back = move || {
@@ -53,8 +53,8 @@ pub fn ReviewPage() -> impl IntoView {
         Ok((receipt, people))
     });
 
-    // A receipt can still be extracting when this screen opens — a fresh upload
-    // followed here, or a retry from here — and what it lands on replaces the
+    // A receipt can still be extracting when this screen opens: a fresh upload
+    // followed here, or a retry from here, and what it lands on replaces the
     // whole form, so it's loaded once, when there's finally something to load.
     let tick = RwSignal::new(0u32);
     let status = extraction_status(id, tick);
@@ -110,7 +110,7 @@ fn ReviewForm(
     let extracting = !receipt.status.is_terminal();
     let reviewed = receipt.reviewed;
     let has_total = receipt.total.is_some();
-    let has_photo = receipt.has_photo;
+    let document = receipt.document;
     let rows = RwSignal::new(Row::from_items(&receipt.line_items));
     // Nothing to guess from until somebody has been described in Settings.
     let described = people.iter().any(Person::described);
@@ -133,7 +133,7 @@ fn ReviewForm(
         }
     });
 
-    // Not part of the reload above — there is nothing left to refetch, so go
+    // Not part of the reload above: there is nothing left to refetch, so go
     // back to the list instead.
     let navigate = leptos_router::hooks::use_navigate();
     Effect::new(move |_| {
@@ -179,12 +179,18 @@ fn ReviewForm(
     view! {
         <ReceiptHeading receipt=receipt.clone() />
 
-        // Two columns once there's room: the photo stays put while you scroll the
-        // fields, which is the whole job of this screen. Stacked on a phone, and
-        // a single column when there's no photo to sit beside.
-        <div class=has_photo.then_some("md:grid md:grid-cols-2 md:items-start md:gap-6")>
-            // The photo is the source of truth; everything else is a claim about it.
-            {has_photo.then(|| view! { <ReceiptPhoto src=format!("/receipt-image/{id}") /> })}
+        // Two columns once there's room: the document stays put while you scroll
+        // the fields, which is the whole job of this screen. Stacked on a phone,
+        // and a single column when there's nothing to sit beside.
+        <div class=document
+            .is_some()
+            .then_some("md:grid md:grid-cols-2 md:items-start md:gap-6")>
+            // The document is the source of truth; everything else is a claim
+            // about it.
+            {document
+                .map(|kind| {
+                    view! { <ReceiptDocument kind src=format!("/receipt-image/{id}") /> }
+                })}
 
             // min-w-0 so long merchant names can't push the column wider than half.
             <div class="min-w-0">
@@ -244,7 +250,7 @@ fn ReviewForm(
                                 review.dispatch(id);
                             }
                         >
-                            {if reviewed { "Checked — mark again" } else { "Mark as checked" }}
+                            {if reviewed { "Checked: mark again" } else { "Mark as checked" }}
                         </button>
                         {(!has_total)
                             .then(|| {
@@ -333,31 +339,15 @@ fn ExtractionNotice(
         }
         .into_any(),
 
-        ExtractionStatus::Done => {
-            let problems = receipt.problems();
-            view! {
-                {(!problems.is_empty())
-                    .then(|| {
-                        view! {
-                            <Notice tone=Tone::Bad>
-                                <p class="mb-2 font-semibold">"Needs attention"</p>
-                                <ul class="list-disc pl-5 text-sm">
-                                    {problems
-                                        .iter()
-                                        .map(|p| view! { <li>{p.clone()}</li> })
-                                        .collect_view()}
-                                </ul>
-                            </Notice>
-                        }
-                    })}
-                {notes.map(|n| view! { <Notice tone=Tone::Quiet>"Extraction notes: " {n}</Notice> })}
-            }
-                .into_any()
+        ExtractionStatus::Done => view! {
+            <Problems heading="Needs attention" items=receipt.problems() />
+            {notes.map(|n| view! { <Notice tone=Tone::Quiet>"Extraction notes: " {n}</Notice> })}
         }
+        .into_any(),
     }
 }
 
-/// Merchant, date and total as they currently stand — what you'd check first.
+/// Merchant, date and total as they currently stand: what you'd check first.
 #[component]
 fn ReceiptHeading(receipt: Receipt) -> impl IntoView {
     view! {
@@ -380,7 +370,7 @@ fn ReceiptHeading(receipt: Receipt) -> impl IntoView {
 
 #[component]
 fn ReceiptFields(receipt: Receipt, submit: impl Fn(SubmitEvent) + 'static) -> impl IntoView {
-    // Editing shows the raw value, not a formatted one — it has to parse back.
+    // Editing shows the raw value, not a formatted one: it has to parse back.
     let editable = |d: Option<Decimal>| d.map(|v| v.to_string()).unwrap_or_default();
 
     view! {

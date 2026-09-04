@@ -1,7 +1,7 @@
 //! Reading the environment.
 //!
 //! Every setting has a working default, so nothing here has to be set to start
-//! the app — these are the overrides, and each one is named after the type it
+//! the app: these are the overrides, and each one is named after the type it
 //! comes back as.
 
 /// An override, or the default when it isn't set.

@@ -9,7 +9,7 @@ use crate::frontend::actions::error_of;
 use crate::frontend::components::{FuzzyPick, INPUT, InfoIcon, Spinner, confirm, upload_action};
 use crate::frontend::money::{money, shares_line};
 use crate::frontend::text::{merchant, plural, total_or_why};
-use crate::shared::api::upload_receipt;
+use crate::shared::api::upload_receipts;
 use crate::shared::dto::{
     Candidate, Charge, Detail, Matched, Person, ReceiptSummary, Refundable, Resolution, Resolve,
     Share,
@@ -156,7 +156,7 @@ fn Details(details: Vec<Detail>) -> impl IntoView {
     }
 }
 
-/// Split out from the row so the nested views stay shallow — a deep one only
+/// Split out from the row so the nested views stay shallow: a deep one only
 /// fails to compile in the wasm release build.
 #[component]
 fn ChargeBody(
@@ -229,8 +229,8 @@ fn ChargeBody(
     }
 }
 
-/// What's shaky about a match. Not errors — a tip makes the amounts differ on
-/// purpose — but the split is only as good as what's behind it.
+/// What's shaky about a match. Not errors: a tip makes the amounts differ on
+/// purpose, but the split is only as good as what's behind it.
 #[component]
 fn Caveats(matched: Matched, amount: Decimal, shared: Shared) -> impl IntoView {
     // Until the model has been through it there is nothing to caveat, and every
@@ -283,7 +283,7 @@ fn Caveats(matched: Matched, amount: Decimal, shared: Shared) -> impl IntoView {
 #[component]
 fn Review(receipt_id: Uuid, statement_id: Uuid, label: &'static str) -> impl IntoView {
     view! {
-        // `back` so the review screen can offer the way here again — without it
+        // `back` so the review screen can offer the way here again: without it
         // the only route back to a half-reconciled statement is the nav bar.
         <a
             href=format!("/receipt/{receipt_id}?back=/reconcile/{statement_id}")
@@ -381,7 +381,7 @@ fn Offer(
     }
 }
 
-/// Any receipt nothing accounts for — the way out when a misread date put the
+/// Any receipt nothing accounts for: the way out when a misread date put the
 /// receipt nowhere near the charge that paid for it.
 #[component]
 fn AttachSelect(
@@ -432,7 +432,7 @@ fn NoReceiptSelect(
             }
         >
             <option value="">"No receipt…"</option>
-            <option value="evenly">"No receipt — split evenly"</option>
+            <option value="evenly">"No receipt: split evenly"</option>
             {shared
                 .people
                 .with_value(|people| {
@@ -441,7 +441,7 @@ fn NoReceiptSelect(
                         .map(|person| {
                             view! {
                                 <option value=person.id
-                                    .to_string()>{format!("No receipt — {}", person.name)}</option>
+                                    .to_string()>{format!("No receipt: {}", person.name)}</option>
                             }
                         })
                         .collect_view()
@@ -453,19 +453,31 @@ fn NoReceiptSelect(
 /// Photograph the receipt for this charge here and now.
 ///
 /// A photo taken for a charge belongs to it by intent rather than by amount, so it
-/// is attached as soon as the upload lands — while the model is still reading it.
+/// is attached as soon as the upload lands, while the model is still reading it.
 #[component]
 fn Photograph(
     charge_id: Uuid,
     resolve: impl Fn(Uuid, Resolve) + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
-    let upload = upload_action(upload_receipt);
+    let upload = upload_action(upload_receipts);
+
+    // One picker here, so one receipt. The endpoint returns a batch because the
+    // capture screen can send one.
+    let uploaded = move || upload.value().get()?.ok();
 
     Effect::new(move |_| {
-        if let Some(Ok(receipt_id)) = upload.value().get() {
+        if let Some(&receipt_id) = uploaded().as_ref().and_then(|u| u.receipt_ids.first()) {
             resolve(charge_id, Resolve::Receipt(receipt_id));
         }
     });
+
+    // A photo the store turned away comes back as a rejection rather than an
+    // error, and would otherwise leave the button looking like it worked.
+    let problem = move || {
+        error_of(upload)
+            .map(|e| e.to_string())
+            .or_else(|| uploaded()?.rejected.into_iter().next())
+    };
 
     view! {
         // Its own form, so `FormData` can pick the file up the same way the
@@ -476,7 +488,7 @@ fn Photograph(
                 // `capture` opens the rear camera straight away on a phone.
                 <input
                     type="file"
-                    name="receipt"
+                    name="receipts"
                     accept="image/*"
                     capture="environment"
                     class="sr-only"
@@ -492,7 +504,7 @@ fn Photograph(
         </form>
 
         {move || {
-            error_of(upload).map(|e| view! { <p class="mt-1 text-sm text-danger">{e.to_string()}</p> })
+            problem().map(|why| view! { <p class="mt-1 text-sm text-danger">{why}</p> })
         }}
     }
 }

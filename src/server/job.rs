@@ -1,7 +1,7 @@
 //! Background extraction.
 //!
 //! Extraction takes ~11s against a local 12B model and can queue behind other
-//! work, so it never runs inline with the upload request — a phone would sit
+//! work, so it never runs inline with the upload request: a phone would sit
 //! there spinning. The upload returns as soon as the row exists, and the client
 //! polls `receipt_status`.
 //!

@@ -6,7 +6,7 @@ use leptos::prelude::*;
 ///
 /// Failure deliberately doesn't count. A screen reloads itself on success, and
 /// doing that after a rejected save would rebuild the form from the server and
-/// throw away what you typed — along with the message saying why.
+/// throw away what you typed, along with the message saying why.
 pub fn succeeded<I, O>(action: Action<I, Result<O, ServerFnError>>) -> bool
 where
     I: 'static,

@@ -19,7 +19,7 @@ pub mod statements;
 /// Child rows bucketed by the parent they belong to.
 ///
 /// toasty has no join and no `IN` loading, so the obvious way to fetch children
-/// is a query per parent — which the list screens would then run a hundred of,
+/// is a query per parent, which the list screens would then run a hundred of,
 /// every time they poll while something is being read. Reading the child table
 /// whole is a few thousand rows against a local SQLite file, and it costs the
 /// same whether the batch is one row or a hundred.

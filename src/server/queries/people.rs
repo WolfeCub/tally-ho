@@ -25,7 +25,7 @@ pub struct Save {
 /// Writes the settings screen in one go: everyone it ended up with, as a
 /// complete replacement for whoever is stored.
 ///
-/// One transaction — a half-applied save could leave items charged to somebody
+/// One transaction: a half-applied save could leave items charged to somebody
 /// who was meant to be gone.
 pub async fn save(db: &mut toasty::Db, people: Vec<Save>) -> toasty::Result<()> {
     let mut tx = db.transaction().await?;
@@ -62,7 +62,7 @@ pub async fn save(db: &mut toasty::Db, people: Vec<Save>) -> toasty::Result<()> 
 
     for person in existing.into_values() {
         // Nothing cascades, and an item pointing at somebody who isn't there
-        // would be neither assigned nor unassigned — it would drop out of both
+        // would be neither assigned nor unassigned: it would drop out of both
         // halves of the split.
         for mut item in
             models::LineItem::filter(models::LineItem::fields().person_id().eq(person.id))
@@ -87,7 +87,7 @@ mod tests {
     use crate::server::models::Person;
     use crate::server::testing::memory_db;
 
-    /// One save has to rename, add and remove people at once — the settings
+    /// One save has to rename, add and remove people at once: the settings
     /// screen sends the list it ended up with, not a diff.
     #[tokio::test]
     async fn saving_people_replaces_the_whole_list() {

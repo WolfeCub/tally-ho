@@ -198,7 +198,7 @@ mod tests {
     /// Regression guard. The model returned `2021-12-08` for a receipt printed
     /// `08/12/21`, silently moving it four months and into a different
     /// statement period. Both digits are valid months, so nothing downstream
-    /// could have caught it — the ordering rule has to be enforced here.
+    /// could have caught it: the ordering rule has to be enforced here.
     #[test]
     fn ambiguous_numeric_dates_are_month_first() {
         assert_eq!(date("08/12/21"), Some(jiff::civil::date(2021, 8, 12)));

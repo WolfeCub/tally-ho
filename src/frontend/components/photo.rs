@@ -1,10 +1,48 @@
-//! The receipt photo, with a full-screen lightbox.
+//! What a receipt was read from, beside the fields it produced: a photo with a
+//! full-screen lightbox, or a PDF in the browser's own viewer.
 
 use leptos::prelude::*;
 
+use crate::shared::dto::Document;
+
+/// The frame either kind sits in: pinned beside the fields once there's room to
+/// put it there, so it stays put while they scroll.
+const FRAME: &str = "mb-4 rounded-lg border border-edge md:sticky md:top-16 md:mb-0";
+
+/// The file behind a receipt, whichever kind it is.
+#[component]
+pub fn ReceiptDocument(kind: Document, src: String) -> impl IntoView {
+    match kind {
+        Document::Photo => view! { <ReceiptPhoto src /> }.into_any(),
+        Document::Pdf => view! { <ReceiptPdf src /> }.into_any(),
+    }
+}
+
+/// A vendor's invoice. No lightbox, every PDF viewer already zooms and scrolls,
+/// and one nested in an overlay fights whatever the browser does with Escape.
+#[component]
+fn ReceiptPdf(src: String) -> impl IntoView {
+    let fallback = src.clone();
+    view! {
+        <div class=FRAME>
+            // `object` rather than `iframe`: it shows its children instead when
+            // the browser won't render a PDF inline, which on iOS it won't.
+            <object
+                data=src
+                type="application/pdf"
+                class="block h-96 w-full md:h-[calc(100vh_-_5rem)]"
+            >
+                <a href=fallback class="block p-4">
+                    "Open the PDF"
+                </a>
+            </object>
+        </div>
+    }
+}
+
 /// Tap to fill the screen, tap again to zoom.
 #[component]
-pub fn ReceiptPhoto(src: String) -> impl IntoView {
+fn ReceiptPhoto(src: String) -> impl IntoView {
     let open = RwSignal::new(false);
     let zoomed = RwSignal::new(false);
     let dismiss = move || {
@@ -26,14 +64,14 @@ pub fn ReceiptPhoto(src: String) -> impl IntoView {
     // children have to be `Fn`, so a String can't just be moved in.
     let src = StoredValue::new(src);
 
-    // Pinned, and scrolls its own overflow — a long receipt scaled to fit the
-    // viewport is unreadable. calc needs the spaces around the `-`, written as
-    // underscores, or Tailwind drops the class without a word.
-    let box_class = "mb-4 rounded-lg border border-edge md:sticky md:top-16 md:mb-0 \
-                     md:max-h-[calc(100vh_-_5rem)] md:overflow-y-auto";
+    // Scrolls its own overflow, which the PDF's viewer does for itself: a long
+    // receipt scaled to fit the viewport is unreadable. calc needs the spaces
+    // around the `-`, written as underscores, or Tailwind drops the class
+    // without a word.
+    let framed = format!("{FRAME} md:max-h-[calc(100vh_-_5rem)] md:overflow-y-auto");
 
     view! {
-        <div class=box_class>
+        <div class=framed>
             // A button, so it's reachable by keyboard and announced as activatable.
             <button
                 type="button"
@@ -49,7 +87,7 @@ pub fn ReceiptPhoto(src: String) -> impl IntoView {
             </button>
         </div>
 
-        // Sibling of the pinned box, not a child — a fixed overlay inside a sticky
+        // Sibling of the pinned box, not a child: a fixed overlay inside a sticky
         // overflow-y-auto container doesn't behave.
         <Show when=move || open.get()>
             // Block, not flex: a flex item shrinks back under the container width,

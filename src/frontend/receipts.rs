@@ -18,7 +18,7 @@ pub fn ReceiptListPage() -> impl IntoView {
     // is never.
     //
     // The resource reads as `None` both before its first load and during every
-    // refetch, and neither means "nothing left to wait for" — taking it that way
+    // refetch, and neither means "nothing left to wait for": taking it that way
     // stops the timer on the first tick, which is to say immediately. So hold the
     // last real answer, and start out assuming there is something to wait for:
     // one load where everything is terminal turns the polling off, and nothing

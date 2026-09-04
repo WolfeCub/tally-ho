@@ -1,4 +1,4 @@
-//! Formatting amounts for display only — the CSV export and the edit inputs
+//! Formatting amounts for display only: the CSV export and the edit inputs
 //! both show raw values, so nothing round-trips through here.
 
 use rust_decimal::Decimal;
@@ -20,7 +20,7 @@ pub fn money(amount: Decimal, currency: &str) -> String {
     }
 }
 
-/// "Josh $21.55 · Ash $13.81" — who owes what, whether that's for one charge or
+/// "Josh $21.55 · Ash $13.81": who owes what, whether that's for one charge or
 /// a whole statement.
 ///
 /// A share nobody on the list answers to is dropped rather than shown nameless:
@@ -36,7 +36,7 @@ pub fn shares_line(shares: &[Share], people: &[Person], currency: &str) -> Strin
         .join(" · ")
 }
 
-/// A total, with the ISO code spelled out — USD, CAD and AUD all use `$`, too
+/// A total, with the ISO code spelled out: USD, CAD and AUD all use `$`, too
 /// ambiguous for a summed figure.
 pub fn money_total(amount: Decimal, currency: &str) -> String {
     match iso_currency::Currency::from_code(currency) {

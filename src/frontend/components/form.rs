@@ -1,7 +1,7 @@
 //! Labelled inputs, the plumbing that reads them back, and asking before
 //! something irreversible.
 //!
-//! Every form here is uncontrolled — read on submit rather than a signal per
+//! Every form here is uncontrolled: read on submit rather than a signal per
 //! input. The server returns the whole receipt after each save, so there's
 //! nothing worth keeping in sync between keystrokes.
 

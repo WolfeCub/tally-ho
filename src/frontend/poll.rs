@@ -1,7 +1,7 @@
 //! Re-asking the server about work it is still doing.
 //!
 //! Extraction runs in the background, after the request that started it has
-//! already returned, and nothing is pushed to the client — so the only way to
+//! already returned, and nothing is pushed to the client, so the only way to
 //! find out it finished is to ask again.
 
 use std::future::Future;
@@ -21,7 +21,7 @@ const EVERY: Duration = Duration::from_millis(1500);
 /// Ticks `tick` every [`EVERY`] for as long as `working` reads true.
 ///
 /// Use `tick` as a resource's source and the resource re-runs on each tick.
-/// `working` is read reactively — usually off that same resource — so polling
+/// `working` is read reactively, usually off that same resource, so polling
 /// stops on the first answer that says the work is done, instead of running for
 /// as long as the page is open.
 ///
@@ -48,7 +48,7 @@ pub fn poll_while(tick: RwSignal<u32>, working: impl Fn() -> bool + Send + Sync 
 /// under you, which throws away whatever local state it was holding and, where
 /// there's a photo, flickers it.
 ///
-/// `None` from `busy` is no answer — nothing to watch yet, or a check still in
+/// `None` from `busy` is no answer: nothing to watch yet, or a check still in
 /// flight. Reading it as "finished" would both stop the polling on its own first
 /// tick and fire `settled` for work that was never running.
 pub fn poll_until_settled(

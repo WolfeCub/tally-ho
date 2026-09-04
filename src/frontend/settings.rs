@@ -21,7 +21,7 @@ pub fn SettingsPage() -> impl IntoView {
         <section>
             <h2 class="font-semibold">"People"</h2>
             <p class="mt-1 mb-4 text-sm text-muted">
-                "Who a line item gets charged to — anything left unassigned is split evenly. "
+                "Who a line item gets charged to: anything left unassigned is split evenly. "
                 "Removing someone unassigns whatever was charged to them."
             </p>
 
@@ -44,7 +44,7 @@ pub fn SettingsPage() -> impl IntoView {
     }
 }
 
-/// Facts about the running app rather than anything to change — room left first,
+/// Facts about the running app rather than anything to change: room left first,
 /// since that's the one that eventually needs acting on.
 #[component]
 fn Info() -> impl IntoView {
@@ -73,7 +73,7 @@ fn Info() -> impl IntoView {
     }
 }
 
-/// Room left where the photos and the database live — the mounted volume, in the
+/// Room left where the photos and the database live: the mounted volume, in the
 /// container, so this is what says whether the claim needs growing.
 #[component]
 fn DiskRow(disk: DiskUsage) -> impl IntoView {
@@ -194,7 +194,7 @@ fn PeopleForm(
                     .then(|| {
                         view! {
                             <p class="text-muted">
-                                "Nobody yet — add someone and you can start charging items to them."
+                                "Nobody yet: add someone and you can start charging items to them."
                             </p>
                         }
                     })

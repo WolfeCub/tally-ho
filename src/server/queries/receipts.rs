@@ -1,5 +1,7 @@
 //! Receipts, always with the line items that belong to them.
 
+use std::collections::{HashMap, HashSet};
+
 use anyhow::Context as _;
 
 use crate::server::{mappers, models};
@@ -41,25 +43,33 @@ pub async fn load(db: &mut toasty::Db, id: uuid::Uuid) -> toasty::Result<Option<
     Ok(Some(mappers::to_dto_receipt(&receipt, &items)))
 }
 
-/// The named receipts with their line items, keyed by id.
+/// The named receipt rows.
 ///
-/// One sweep for the lot rather than a [`load`] each: toasty has no `IN`, and
-/// the caller is holding a whole statement's worth of ids.
-pub(super) async fn by_id(
+/// One sweep for the lot rather than a query each: toasty has no `IN`, and the
+/// callers are holding a whole statement's or a whole batch's worth of ids.
+async fn rows_by_id(
     db: &mut toasty::Db,
     ids: impl IntoIterator<Item = uuid::Uuid>,
-) -> toasty::Result<std::collections::HashMap<uuid::Uuid, dto::Receipt>> {
-    let ids: std::collections::HashSet<_> = ids.into_iter().collect();
+) -> toasty::Result<Vec<models::Receipt>> {
+    let ids: HashSet<_> = ids.into_iter().collect();
     if ids.is_empty() {
-        return Ok(std::collections::HashMap::new());
+        return Ok(Vec::new());
     }
 
-    let wanted = models::Receipt::all()
+    Ok(models::Receipt::all()
         .exec(db)
         .await?
         .into_iter()
         .filter(|receipt| ids.contains(&receipt.id))
-        .collect();
+        .collect())
+}
+
+/// The named receipts with their line items, keyed by id.
+pub(super) async fn by_id(
+    db: &mut toasty::Db,
+    ids: impl IntoIterator<Item = uuid::Uuid>,
+) -> toasty::Result<HashMap<uuid::Uuid, dto::Receipt>> {
+    let wanted = rows_by_id(db, ids).await?;
 
     Ok(with_items(db, wanted)
         .await?
@@ -108,7 +118,7 @@ pub async fn load_range(
 }
 
 /// Receipts no charge accounts for, newest first. What the picker offers when
-/// nothing was suggested — a receipt whose date was misread is nowhere near the
+/// nothing was suggested: a receipt whose date was misread is nowhere near the
 /// charge that paid for it.
 pub async fn spare(db: &mut toasty::Db, limit: usize) -> toasty::Result<Vec<dto::ReceiptSummary>> {
     let taken = super::charges::spoken_for(db).await?;
@@ -122,6 +132,24 @@ pub async fn spare(db: &mut toasty::Db, limit: usize) -> toasty::Result<Vec<dto:
         .collect();
 
     summaries(db, free).await
+}
+
+/// The named receipts as a list shows them, in the order asked for.
+///
+/// For watching a batch upload land. Anything since deleted simply drops out.
+pub async fn summaries_of(
+    db: &mut toasty::Db,
+    ids: &[uuid::Uuid],
+) -> toasty::Result<Vec<dto::ReceiptSummary>> {
+    let found = rows_by_id(db, ids.iter().copied()).await?;
+
+    let mut found: HashMap<_, _> = summaries(db, found)
+        .await?
+        .into_iter()
+        .map(|summary| (summary.id, summary))
+        .collect();
+
+    Ok(ids.iter().filter_map(|id| found.remove(id)).collect())
 }
 
 /// Receipts as a list shows them: the conclusion about each one rather than its
@@ -140,7 +168,7 @@ async fn summaries(
 /// Creates the row an upload gets read into, and hands back its id.
 ///
 /// Deliberately minimal: everything else is unknown until extraction runs.
-/// `purchased_on` is provisionally today and `total` stays null — null means
+/// `purchased_on` is provisionally today and `total` stays null: null means
 /// "not yet known", never zero. `currency` is the deployment's, which extraction
 /// overwrites if the receipt prints one of its own.
 ///
@@ -181,7 +209,7 @@ pub async fn reset_for_retry(db: &mut toasty::Db, id: uuid::Uuid) -> anyhow::Res
         .context("no such receipt")?;
 
     if receipt.status != models::ExtractionStatus::Failed {
-        anyhow::bail!("this receipt didn't fail — nothing to retry");
+        anyhow::bail!("this receipt didn't fail, nothing to retry");
     }
 
     toasty::update!(receipt {
@@ -203,7 +231,7 @@ pub async fn mark_reviewed(db: &mut toasty::Db, id: uuid::Uuid) -> anyhow::Resul
         .context("no such receipt")?;
 
     if receipt.total.is_none() {
-        anyhow::bail!("this receipt has no total yet — enter one before marking it reviewed");
+        anyhow::bail!("this receipt has no total yet, enter one before marking it reviewed");
     }
 
     toasty::update!(receipt {
@@ -240,7 +268,7 @@ pub struct SaveItem {
 /// Writes the review screen in one go: the header fields, plus the line items as
 /// a complete replacement for whatever is stored.
 ///
-/// One transaction — items dropped without the total that justified them reads
+/// One transaction: items dropped without the total that justified them reads
 /// as a genuine receipt, and nothing would flag it.
 pub async fn save(db: &mut toasty::Db, id: uuid::Uuid, save: Save) -> toasty::Result<()> {
     let mut tx = db.transaction().await?;
@@ -385,7 +413,7 @@ mod tests {
         .unwrap();
 
         // Read, but no total came out of it, so nothing can match it until a
-        // human fixes it — one problem.
+        // human fixes it: one problem.
         toasty::create!(Receipt {
             purchased_on: jiff::civil::date(2026, 7, 2),
             merchant: "Unreadable",
@@ -449,7 +477,7 @@ mod tests {
 
         let receipt = super::load(&mut db, id).await.unwrap().unwrap();
         assert_eq!(receipt.status, dto::ExtractionStatus::Done);
-        assert!(!receipt.has_photo);
+        assert!(receipt.document.is_none());
         assert_eq!(receipt.currency, "CAD");
         // Null, not zero: nobody has said what this cost yet.
         assert!(receipt.total.is_none());
@@ -518,7 +546,7 @@ mod tests {
         assert_eq!(survivors[0].1.len(), 1);
     }
 
-    /// One save has to update, add and delete line items at once — the review
+    /// One save has to update, add and delete line items at once: the review
     /// screen sends the list it ended up with, not a diff.
     #[tokio::test]
     async fn saving_a_receipt_replaces_its_line_items() {
@@ -603,7 +631,7 @@ mod tests {
             "only the rows a human changed are marked edited"
         );
 
-        // Dropping a row has to take it out of the table, not just the screen —
+        // Dropping a row has to take it out of the table, not just the screen:
         // anything loading items directly would still count an orphan.
         let all = LineItem::filter(LineItem::fields().receipt_id().eq(receipt.id))
             .exec(&mut db)

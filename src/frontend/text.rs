@@ -45,7 +45,7 @@ pub fn merchant(name: &str) -> &str {
 /// What goes where the total goes: the amount, or why there isn't one.
 ///
 /// A receipt still being read hasn't got one *yet*, which is a different thing
-/// from a receipt that was read and had none — the first is worth waiting for.
+/// from a receipt that was read and had none: the first is worth waiting for.
 pub fn total_or_why(total: Option<Decimal>, currency: &str, status: ExtractionStatus) -> String {
     match total {
         Some(total) => money(total, currency),

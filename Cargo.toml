@@ -21,6 +21,9 @@ iso_currency = "0.5"
 # No `v4`/`v7`: the client only parses ids, and those need a wasm randomness
 # source.
 uuid = { version = "1.24", features = ["serde"] }
+# Already in the tree via leptos. Named here only for `FileList`, which is how
+# the capture screen counts what you picked before it uploads.
+web-sys = { version = "0.3", features = ["FileList"] }
 
 # Server-only, hence `optional` + the `ssr` feature below. Most of these will not
 # build for wasm32 at all.
@@ -46,6 +49,9 @@ schemars = { version = "1.0", optional = true }
 image = { version = "0.25", optional = true }
 kamadak-exif = { version = "0.6", optional = true }
 base64 = { version = "0.22", optional = true }
+pdf-extract = { version = "0.12", optional = true }
+# Ollama's own endpoints, which rig has no wrapper for.
+reqwest = { version = "0.13", default-features = false, features = ["json"], optional = true }
 # `statvfs` in bytes, for the room left on the volume the data sits on. Not the
 # `nix` crate: this one builds on Windows too, and is already in the tree.
 fs4 = { version = "0.13", default-features = false, features = ["sync"], optional = true }
@@ -80,6 +86,8 @@ ssr = [
     "dep:image",
     "dep:kamadak-exif",
     "dep:base64",
+    "dep:pdf-extract",
+    "dep:reqwest",
     "dep:fs4",
     "leptos/ssr",
     "leptos_meta/ssr",

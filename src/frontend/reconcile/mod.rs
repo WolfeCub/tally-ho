@@ -198,7 +198,7 @@ fn StatementView(
     statement: Statement,
     spare: Vec<ReceiptSummary>,
     reload: impl Fn() + Copy + Send + Sync + 'static,
-    /// Owned by the page, not this view — every decision reloads the statement,
+    /// Owned by the page, not this view, every decision reloads the statement,
     /// and a filter that quietly turned itself off each time would be worse than
     /// not having one.
     hide_done: RwSignal<bool>,
@@ -294,7 +294,7 @@ fn Label(
     let rename = Action::new(|(id, label): &(Uuid, String)| rename_statement(*id, label.clone()));
     let editing = RwSignal::new(false);
 
-    // No `editing.set(false)`: reloading rebuilds this component with the name it
+    // No `editing.set(false)`, reloading rebuilds this component with the name it
     // now has, so the form stays open over the save rather than flicking back to
     // the old one and then updating.
     Effect::new(move |_| {

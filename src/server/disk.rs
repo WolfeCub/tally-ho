@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::shared::dto;
 
-/// Stats the filesystem holding `path`, which is the store root — so in the
+/// Stats the filesystem holding `path`, which is the store root, so in the
 /// container this reports the mounted volume and not the image around it.
 ///
 /// The path itself has to exist, so this is asked about the root rather than

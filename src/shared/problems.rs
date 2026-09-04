@@ -14,8 +14,9 @@ pub fn line_item_sum(items: &[LineItem]) -> Decimal {
 /// Everything wrong with a receipt, in the order a human should care. A list,
 /// not a bool, so the review screen can say *what* is wrong.
 ///
-/// Note what isn't checked: line items against the total. Items are pre-tax, so
-/// on a taxed receipt that always looks off by the tax.
+/// Note what isn't checked: the subtotal itself. It means the pre-tax total on
+/// one receipt and only the goods on the next, so there's no one figure to hold
+/// it to, and nothing computes with it.
 pub fn problems_of(
     subtotal: Option<Decimal>,
     tax: Option<Decimal>,
@@ -25,36 +26,34 @@ pub fn problems_of(
     let mut out = Vec::new();
 
     if total.is_none() {
-        out.push("No total was read — reconciliation needs one.".to_string());
+        out.push("No total was read: reconciliation needs one.".to_string());
     }
 
-    // Items should reconstruct the subtotal (pre-tax). A gap here means a line
-    // was dropped, duplicated, or misread.
+    // Items should reconstruct the pre-tax figure. A gap here means a line was
+    // dropped, duplicated, or misread.
     if let Some(subtotal) = subtotal
         && !items.is_empty()
     {
-        let sum = line_item_sum(items);
-        let diff = subtotal - sum;
-        if !diff.is_zero() {
-            out.push(format!(
-                "Line items add up to {sum}, but the subtotal says {subtotal} (off by {diff})."
-            ));
-        }
-    }
+        // `total - tax` on any receipt. The printed subtotal is only that figure
+        // when nothing was added below it, which an invoice often does, so it's
+        // the fallback. A receipt that printed no subtotal is left unchecked.
+        let pre_tax = match (tax, total) {
+            (Some(tax), Some(total)) => total - tax,
+            _ => subtotal,
+        };
 
-    // subtotal + tax should equal what was actually charged.
-    if let (Some(sub), Some(tax), Some(total)) = (subtotal, tax, total) {
-        let diff = sub + tax - total;
+        let sum = line_item_sum(items);
+        let diff = pre_tax - sum;
         if !diff.is_zero() {
             out.push(format!(
-                "{sub} + {tax} tax = {}, but the total says {total} (off by {diff}).",
-                sub + tax
+                "Line items add up to {sum}, but the receipt comes to {pre_tax} before tax \
+                 (off by {diff})."
             ));
         }
     }
 
     if items.iter().any(|i| i.total.is_zero()) {
-        out.push("One or more line items have no amount — they were unreadable.".to_string());
+        out.push("One or more line items have no amount: they were unreadable.".to_string());
     }
 
     out
@@ -62,7 +61,7 @@ pub fn problems_of(
 
 impl Receipt {
     /// Sum of the line items, which is *not* [`Receipt::total`] on a taxed
-    /// receipt — it should match [`Receipt::subtotal`].
+    /// receipt: it should match `total - tax`.
     pub fn line_item_sum(&self) -> Decimal {
         line_item_sum(&self.line_items)
     }
@@ -122,7 +121,7 @@ mod tests {
 
     /// A dropped or duplicated line item shows up here and nowhere else.
     #[test]
-    fn items_not_matching_the_subtotal_is_a_problem() {
+    fn items_not_matching_the_total_after_tax_is_a_problem() {
         let r = receipt(
             Some("32.82"),
             Some("2.54"),
@@ -131,25 +130,57 @@ mod tests {
         );
         let p = r.problems();
         assert!(
-            p.iter().any(|s| s.contains("Line items add up to 14.68")),
+            p.iter().any(|s| s.contains("comes to 32.82 before tax")),
             "got {p:?}"
         );
+        assert!(p.iter().any(|s| s.contains("off by 18.14")), "got {p:?}");
     }
 
+    /// Without a tax there's nothing to derive the pre-tax figure from, so the
+    /// printed subtotal is what the items are held to. The gap says which was
+    /// used: against the 35.36 total it would be 23.64.
     #[test]
-    fn subtotal_plus_tax_not_matching_the_total_is_a_problem() {
+    fn items_are_checked_against_the_subtotal_when_no_tax_was_read() {
+        let r = receipt(Some("32.82"), None, Some("35.36"), vec![item("11.72")]);
+        let p = r.problems();
+        assert!(p.iter().any(|s| s.contains("off by 21.10")), "got {p:?}");
+    }
+
+    /// Voilà prints a subtotal covering only the groceries, then adds a delivery
+    /// fee, a bag charge and a voucher below it. Those are line items, so they
+    /// sum past the printed subtotal, and the receipt is still right.
+    #[test]
+    fn a_subtotal_that_excludes_fees_is_not_a_problem() {
         let r = receipt(
-            Some("10.00"),
+            Some("80.78"), // groceries only
+            Some("0.07"),
+            Some("81.35"),
+            vec![
+                item("80.78"),
+                item("11.99"),  // delivery
+                item("0.50"),   // bag charge
+                item("-11.99"), // free-delivery voucher
+            ],
+        );
+        assert_eq!(r.line_item_sum(), dec("81.28"));
+        assert!(r.problems().is_empty(), "got {:?}", r.problems());
+    }
+
+    /// Nothing is held to the subtotal, so a nonsensical one is not a problem
+    /// on its own: the items and the total agree, and the split follows those.
+    #[test]
+    fn a_subtotal_nothing_agrees_with_is_left_alone() {
+        let r = receipt(
+            Some("0.01"),
             Some("1.00"),
-            Some("99.00"),
+            Some("11.00"),
             vec![item("10.00")],
         );
-        let p = r.problems();
-        assert!(p.iter().any(|s| s.contains("off by -88")), "got {p:?}");
+        assert!(r.problems().is_empty(), "got {:?}", r.problems());
     }
 
     /// An unreadable amount is stored as zero rather than guessed, so it has to
-    /// be called out explicitly — it would otherwise look like a free item.
+    /// be called out explicitly: it would otherwise look like a free item.
     #[test]
     fn a_zero_amount_line_item_is_flagged() {
         let r = receipt(
@@ -160,6 +191,32 @@ mod tests {
         );
         let p = r.problems();
         assert!(p.iter().any(|s| s.contains("no amount")), "got {p:?}");
+    }
+
+    /// A receipt whose items, subtotal, tax and total all agree is flagged for
+    /// nothing. The refund slip is here because those figures go negative
+    /// together, and a tax of zero because plenty of receipts print one.
+    #[test]
+    fn a_receipt_where_every_figure_agrees_is_never_flagged() {
+        for (subtotal, tax) in [
+            ("32.82", "2.54"),
+            ("19.99", "0.00"),
+            ("100.00", "13.00"),
+            ("-5.00", "-0.65"), // a refund slip
+        ] {
+            let total = dec(subtotal) + dec(tax);
+            let r = receipt(
+                Some(subtotal),
+                Some(tax),
+                Some(&total.to_string()),
+                vec![item(subtotal)],
+            );
+            assert!(
+                r.problems().is_empty(),
+                "{subtotal}+{tax}: {:?}",
+                r.problems()
+            );
+        }
     }
 
     #[test]

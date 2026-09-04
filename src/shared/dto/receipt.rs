@@ -20,6 +20,14 @@ impl ExtractionStatus {
     }
 }
 
+/// What a receipt was read from, which decides how the review screen shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Document {
+    Photo,
+    /// A vendor's invoice, shown in the browser's own PDF viewer.
+    Pdf,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LineItem {
     pub id: Uuid,
@@ -78,16 +86,16 @@ pub struct Receipt {
     pub status: ExtractionStatus,
     pub extraction_error: Option<String>,
     pub reviewed: bool,
-    /// False for one typed in by hand.
-    pub has_photo: bool,
+    /// `None` for one typed in by hand, which has no file behind it.
+    pub document: Option<Document>,
     pub line_items: Vec<LineItem>,
 }
 
-/// A whole receipt as the review screen left it — the header fields plus the
+/// A whole receipt as the review screen left it: the header fields plus the
 /// complete line-item list, saved in one go.
 ///
 /// Money and dates travel as strings, exactly as typed, and the server parses them
-/// with the same routines the extractor uses — so "$12.34" and "8/12/21" work, and
+/// with the same routines the extractor uses, so "$12.34" and "8/12/21" work, and
 /// there's one parser rather than two. An empty string clears an optional field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceiptSave {
@@ -112,6 +120,17 @@ pub struct LineItemSave {
     pub person_id: Option<Uuid>,
 }
 
+/// What a bulk upload landed: the receipts now queued, and the files that never
+/// got that far.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Uploaded {
+    /// One per stored file, in the order they were picked.
+    pub receipt_ids: Vec<Uuid>,
+    /// Each rejected file named with the reason, so it can be sorted out and
+    /// sent again on its own.
+    pub rejected: Vec<String>,
+}
+
 /// One row in a list of receipts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceiptSummary {
@@ -120,7 +139,7 @@ pub struct ReceiptSummary {
     pub merchant: String,
     /// `None` when extraction could not read a total and nobody has fixed it.
     pub total: Option<Decimal>,
-    /// ISO code. Carried so a row can be labelled with the right symbol — the
+    /// ISO code. Carried so a row can be labelled with the right symbol: the
     /// extractor infers this from the receipt, so it is not always USD.
     pub currency: String,
     pub status: ExtractionStatus,

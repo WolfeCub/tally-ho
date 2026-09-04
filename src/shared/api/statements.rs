@@ -16,7 +16,7 @@ use {
 /// Reads an uploaded statement CSV, writes its charges, and proposes a receipt
 /// for the ones that are obvious.
 ///
-/// Returns the statement to reconcile, plus what the sniffer made of the file —
+/// Returns the statement to reconcile, plus what the sniffer made of the file:
 /// which columns it used and any row it couldn't read. Those are shown rather
 /// than logged: picking the wrong column would otherwise export a total that
 /// quietly doesn't match the card.
@@ -61,7 +61,7 @@ pub async fn list_statements() -> Result<Vec<dto::StatementSummary>, ServerFnErr
         .reported_as("could not load statements")
 }
 
-/// One statement to reconcile: every charge, what accounts for it, and what it
+/// One statement to reconcile, every charge, what accounts for it, and what it
 /// splits to.
 #[server]
 pub async fn get_statement(id: Uuid) -> Result<dto::Statement, ServerFnError> {

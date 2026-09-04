@@ -1,6 +1,7 @@
-//! On-disk storage for receipt images.
+//! On-disk storage for the files receipts are read from: photos, and the PDF
+//! invoices online vendors send.
 //!
-//! Images live on the filesystem rather than in SQLite: full-resolution phone
+//! They live on the filesystem rather than in SQLite: full-resolution phone
 //! photos would bloat the database and they are never queried, only fetched by
 //! path.
 
@@ -16,7 +17,7 @@ pub enum StoreError {
         #[source]
         source: std::io::Error,
     },
-    #[error("unrecognized image format: {0}")]
+    #[error("not a PDF, and not an image we can read: {0}")]
     Format(#[from] image::ImageError),
 }
 
@@ -41,30 +42,37 @@ impl Store {
         &self.root
     }
 
-    /// Stores an uploaded image and returns the path to record on the receipt,
+    /// Stores an uploaded file and returns the path to record on the receipt,
     /// relative to the store root.
     ///
     /// The filename is generated, never taken from the upload: no
     /// client-controlled string reaches the filesystem, so there is no path
-    /// traversal to defend against. Bytes are written verbatim — the original
+    /// traversal to defend against. Bytes are written verbatim: the original
     /// is what a human re-reads when the model gets something wrong, so it is
     /// never the downscaled copy.
+    ///
+    /// The extension is what later says which of the two a receipt came from,
+    /// so it is taken from the bytes and not from what the browser claimed.
     pub async fn write_upload(
         &self,
         bytes: &[u8],
         today: jiff::civil::Date,
     ) -> Result<String, StoreError> {
-        // Also serves as validation: anything `image` cannot identify is not
-        // worth storing or sending to a model.
-        let format = image::guess_format(bytes)?;
-        let ext = format.extensions_str().first().copied().unwrap_or("bin");
+        // Sniffing the bytes is also what validates them: anything neither of
+        // these recognizes is not worth storing or sending to a model.
+        let (folder, ext) = if super::pdf::is_pdf(bytes) {
+            ("documents", "pdf")
+        } else {
+            let format = image::guess_format(bytes)?;
+            let ext = format.extensions_str().first().copied().unwrap_or("bin");
+            ("images", ext)
+        };
 
         let relative = format!(
-            "images/{:04}/{:02}/{}.{}",
+            "{folder}/{:04}/{:02}/{}.{ext}",
             today.year(),
             today.month(),
             Uuid::new_v4(),
-            ext
         );
         let absolute = self.absolute(&relative);
 
@@ -86,7 +94,7 @@ impl Store {
         Ok(relative)
     }
 
-    /// Removes a stored image. A file that has already gone is not an error —
+    /// Removes a stored image. A file that has already gone is not an error:
     /// the row is on its way out either way, and leaving it behind would strand
     /// the receipt in the list.
     ///

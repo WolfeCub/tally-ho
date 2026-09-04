@@ -54,9 +54,22 @@ pub fn to_dto_receipt(receipt: &models::Receipt, items: &[models::LineItem]) -> 
         status: to_dto_status(&receipt.status),
         extraction_error: receipt.extraction_error.clone(),
         reviewed: receipt.reviewed_at.is_some(),
-        has_photo: !receipt.image_path.is_empty(),
+        document: document_of(&receipt.image_path),
         line_items,
     }
+}
+
+/// What a receipt was read from, by the extension the store gave the file. An
+/// empty path is one typed in by hand.
+fn document_of(path: &str) -> Option<dto::Document> {
+    if path.is_empty() {
+        return None;
+    }
+    Some(if path.ends_with(".pdf") {
+        dto::Document::Pdf
+    } else {
+        dto::Document::Photo
+    })
 }
 
 pub fn to_dto_summary(
@@ -69,7 +82,7 @@ pub fn to_dto_summary(
     let status = to_dto_status(&receipt.status);
 
     // A receipt that hasn't been read yet fails the checks for the uninteresting
-    // reason that nothing is filled in — every one of them would report "no
+    // reason that nothing is filled in, every one of them would report "no
     // total" on a receipt whose total simply hasn't been extracted. That's the
     // job not being finished, not something wrong with the receipt, so hold the
     // checks until it is. `Failed` still reports: there the fields really are

@@ -33,7 +33,7 @@ impl Statement {
         (left.clone().count(), left.sum())
     }
 
-    /// What each person owes across the whole statement. Proposals don't count —
+    /// What each person owes across the whole statement. Proposals don't count:
     /// this figure and the export have to agree.
     pub fn totals(&self) -> Vec<Share> {
         let owed = |person: &Person| {
@@ -60,7 +60,7 @@ impl Statement {
 /// Line items are pre-tax, so the shares are scaled up to the charge: tax and any
 /// tip land on whoever bought the taxed items instead of dropping out of the
 /// statement. Tax is really per item and a receipt doesn't say which items were
-/// taxed, so this is an approximation — but the columns have to add up to the
+/// taxed, so this is an approximation, but the columns have to add up to the
 /// charge, which is the whole point of the export.
 ///
 /// Unassigned items split evenly, and so does a charge with nothing to go on.
@@ -155,7 +155,7 @@ pub(super) fn minor_units(currency: &str) -> u32 {
 /// parts add up to exactly `amount`.
 ///
 /// Rounding each share on its own is out by a cent often enough to be noticed,
-/// and columns that don't sum to the charge are worse than useless — that sum is
+/// and columns that don't sum to the charge are worse than useless: that sum is
 /// the thing being checked. So the leftover goes to the largest fractions.
 fn allocate(amount: Decimal, currency: &str, weights: &[Decimal]) -> Vec<Decimal> {
     let places = minor_units(currency);
@@ -165,7 +165,7 @@ fn allocate(amount: Decimal, currency: &str, weights: &[Decimal]) -> Vec<Decimal
 
     let ideal: Vec<Decimal> = weights.iter().map(|w| cents * w / total).collect();
     // Floor, so every share starts under its ideal and the remainder to hand out
-    // is positive — which holds for a refund as much as a purchase.
+    // is positive, which holds for a refund as much as a purchase.
     let mut parts: Vec<Decimal> = ideal.iter().map(Decimal::floor).collect();
 
     let mut largest_fraction: Vec<usize> = (0..parts.len()).collect();
@@ -234,8 +234,8 @@ mod tests {
         assert_eq!(amounts(&shares), [dec("15.00"), dec("5.00")]);
     }
 
-    /// A charge with no items to go on — a receipt still being read, or a
-    /// subscription nobody photographed — is still split, not dropped.
+    /// A charge with no items to go on, whether a receipt still being read or a
+    /// subscription nobody photographed, is still split rather than dropped.
     #[test]
     fn nothing_to_go_on_splits_evenly_to_the_last_cent() {
         let shares = split("10.01", &[]);

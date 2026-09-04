@@ -303,7 +303,7 @@ fn Guessed(why: String) -> impl IntoView {
     }
 }
 
-// `use<>` because the view owns its strings — without it the return type
+// `use<>` because the view owns its strings: without it the return type
 // captures the borrow and can't outlive the `with_value` it's read inside.
 fn options(people: &[Person], selected: Option<Uuid>) -> impl IntoView + use<> {
     people
@@ -385,7 +385,7 @@ fn ItemRow(row: Row, rows: RwSignal<Vec<Row>>, people: StoredValue<Vec<Person>>)
                             }
                         >
                             <option value="" selected=person_id.is_none()>
-                                "Unassigned — split evenly"
+                                "Unassigned: split evenly"
                             </option>
                             {people.with_value(|people| options(people, person_id))}
                         </select>

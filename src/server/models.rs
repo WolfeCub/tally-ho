@@ -14,7 +14,7 @@ pub struct Receipt {
     #[auto]
     pub id: Uuid,
 
-    /// Calendar date printed on the receipt — the field statement periods filter
+    /// Calendar date printed on the receipt: the field statement periods filter
     /// on. A civil date, not a timestamp: a receipt is dated, not instantaneous,
     /// and we never want a timezone shifting a purchase across a period
     /// boundary. Indexed because the range query is the app's whole purpose.
@@ -25,7 +25,7 @@ pub struct Receipt {
 
     pub subtotal: Option<Decimal>,
     pub tax: Option<Decimal>,
-    /// Nullable, meaning "not yet established" — **not** "zero".
+    /// Nullable, meaning "not yet established": **not** "zero".
     ///
     /// Every real receipt has a total, but extraction can fail to read one, and
     /// the row still has to exist so the image is stored and a human can fix
@@ -36,7 +36,7 @@ pub struct Receipt {
     pub total: Option<Decimal>,
     pub currency: String,
 
-    /// Path relative to `DATA_DIR`. The image bytes stay on disk — SQLite would
+    /// Path relative to `DATA_DIR`. The image bytes stay on disk: SQLite would
     /// bloat badly holding full-resolution phone photos.
     pub image_path: String,
 
@@ -47,7 +47,7 @@ pub struct Receipt {
     /// Which Ollama model produced this, so a bad batch is traceable.
     pub model_used: Option<String>,
     /// Raw model output, kept for debugging bad extractions. Never queried, so
-    /// opaque text storage is fine — `Json<T>` requires an explicit column type.
+    /// opaque text storage is fine: `Json<T>` requires an explicit column type.
     #[column(type = text)]
     pub raw_response: Option<toasty::Json<serde_json::Value>>,
 
@@ -87,7 +87,7 @@ pub struct Person {
 ///
 /// Stored rather than held in the browser because resolving a charge can mean
 /// photographing a receipt, waiting for the model, and correcting it on the
-/// review screen — work that outlives any page.
+/// review screen: work that outlives any page.
 #[derive(Debug, toasty::Model)]
 pub struct Statement {
     #[key]
@@ -101,7 +101,7 @@ pub struct Statement {
     pub currency: String,
 
     /// Earliest and latest charge on the file. Read off the rows rather than
-    /// asked for — the statement already knows its own period.
+    /// asked for: the statement already knows its own period.
     pub begins_on: jiff::civil::Date,
     pub ends_on: jiff::civil::Date,
 
@@ -124,7 +124,7 @@ pub struct Charge {
     #[belongs_to]
     pub statement: toasty::Deferred<Statement>,
 
-    /// Whichever date the file carried — the transaction date where there is
+    /// Whichever date the file carried: the transaction date where there is
     /// one, since that is the day the receipt was printed.
     pub charged_on: jiff::civil::Date,
     pub description: String,
@@ -145,20 +145,20 @@ pub struct Charge {
     #[index]
     pub receipt_id: Option<Uuid>,
     /// Whether a human has agreed to the match. Matching fills [`Self::receipt_id`]
-    /// in by itself, which is a proposal and not an answer — an amount can match
+    /// in by itself, which is a proposal and not an answer: an amount can match
     /// the wrong receipt and every total still balances.
     #[default(false)]
     pub confirmed: bool,
-    /// Set when a charge is deliberately receiptless — a subscription, a fee.
+    /// Set when a charge is deliberately receiptless: a subscription, a fee.
     /// Without it those never resolve and a statement can't be finished.
     #[default(false)]
     pub no_receipt: bool,
     /// Whose a receiptless charge is; `None` splits it evenly. Read only when
-    /// [`Self::no_receipt`] is set — a matched receipt splits by its own items.
+    /// [`Self::no_receipt`] is set, a matched receipt splits by its own items.
     #[index]
     pub person_id: Option<Uuid>,
 
-    /// The purchase this refund hands money back on. Any statement — a refund
+    /// The purchase this refund hands money back on. Any statement: a refund
     /// usually posts on the next one. Indexed because a purchase's row asks
     /// what has come back off it.
     #[index]

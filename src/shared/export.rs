@@ -61,7 +61,7 @@ fn field(value: &str) -> String {
 /// Escapes a field that came off a bank file or out of a model reading a photo.
 ///
 /// A leading `=`, `+`, `@` or control character makes spreadsheets treat the cell
-/// as a formula. Text columns only — we render the amounts ourselves, and a
+/// as a formula. Text columns only: we render the amounts ourselves, and a
 /// leading `-` there is a negative number.
 fn text(value: &str) -> String {
     let dangerous = matches!(value.chars().next(), Some('=' | '+' | '@' | '\t' | '\r'));
@@ -105,7 +105,7 @@ mod tests {
     }
 
     /// A refund is accounted for by the purchase it came off rather than a
-    /// receipt of its own, so that's what goes in the column — and its figures
+    /// receipt of its own, so that's what goes in the column, and its figures
     /// are filled in like any other settled row, negative so they come off.
     #[test]
     fn a_refund_names_the_purchase_it_came_off() {

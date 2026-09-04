@@ -15,7 +15,7 @@ fn url_from_env() -> String {
 /// Where the migrations, snapshots, and history file live.
 ///
 /// toasty-cli resolves this relative to the working directory, which is fine in
-/// the repo but not for an installed binary — hence `MIGRATIONS_DIR`, which the
+/// the repo but not for an installed binary, hence `MIGRATIONS_DIR`, which the
 /// Nix wrapper points at the copy in the store.
 ///
 /// Built in code rather than read from a `Toasty.toml`: the defaults are already
@@ -50,7 +50,7 @@ pub async fn connect_raw_url(url: &str) -> toasty::Result<toasty::Db> {
     let max_pool_size = if url.contains(":memory:") { 1 } else { 16 };
 
     toasty::Db::builder()
-        // `crate::*` is the only whole-crate form the macro takes — there's no
+        // `crate::*` is the only whole-crate form the macro takes, there's no
         // arm for a module glob like `server::models::*`. It finds models by
         // CARGO_PKG_NAME rather than module path, so wherever they live is fine.
         .models(toasty::models!(crate::*))
@@ -71,7 +71,7 @@ pub async fn connect_url(url: &str) -> anyhow::Result<toasty::Db> {
         // Migrations cannot reach an in-memory database: applying them opens a
         // fresh driver connection, and for `:memory:` that is a *different*
         // empty database than the pool's. So tests build the schema straight
-        // from the models — which is also what makes the drift test below worth
+        // from the models, which is also what makes the drift test below worth
         // having, since it is what ties the two paths together.
         db.push_schema().await?;
         return Ok(db);
@@ -84,8 +84,8 @@ pub async fn connect_url(url: &str) -> anyhow::Result<toasty::Db> {
 /// Runs any migrations in `toasty/history.toml` that this database hasn't seen.
 ///
 /// Done at startup rather than as a separate deploy step: this is a single-user
-/// app started with `cargo leptos watch`, and the alternative failure mode —
-/// forgetting to migrate and then hitting missing-column errors at runtime — is
+/// app started with `cargo leptos watch`, and the alternative failure mode,
+/// forgetting to migrate and then hitting missing-column errors at runtime, is
 /// far more confusing than the migration output in the log.
 ///
 /// The driver records applied ids in `__toasty_migrations` and wraps each
@@ -102,7 +102,7 @@ async fn apply_migrations(db: &toasty::Db) -> anyhow::Result<()> {
             if format!("{e:#}").contains("already exists") {
                 e.context(
                     "this database has tables but no migration history, so it predates \
-                     migrations — delete it and let them rebuild it: rm -rf ./data",
+                     migrations, delete it and let them rebuild it: rm -rf ./data",
                 )
             } else {
                 e
@@ -118,7 +118,7 @@ async fn apply_migrations(db: &toasty::Db) -> anyhow::Result<()> {
         .await
         .map_err(|e| {
             anyhow::anyhow!(
-                "the schema is missing after applying migrations ({e}) — if toasty/ is \
+                "the schema is missing after applying migrations ({e}): if toasty/ is \
                  empty, generate the first migration: \
                  cargo run --features ssr --bin migrate -- migration generate --name init"
             )
@@ -149,7 +149,7 @@ mod tests {
         let latest = history
             .entries()
             .last()
-            .expect("no migrations yet — run: migration generate --name init");
+            .expect("no migrations yet, run: migration generate --name init");
         let snapshot = toasty::migration::Snapshot::load(
             config
                 .migration
@@ -204,7 +204,7 @@ mod tests {
     }
 
     /// The app's core query. Boundary dates must be inclusive at both ends, and
-    /// `jiff` dates are stored as ISO-8601 TEXT, which sorts lexicographically —
+    /// `jiff` dates are stored as ISO-8601 TEXT, which sorts lexicographically:
     /// this is what makes `.ge()/.le()` correct rather than merely plausible.
     #[tokio::test]
     async fn date_range_filter_is_inclusive_at_both_ends() {

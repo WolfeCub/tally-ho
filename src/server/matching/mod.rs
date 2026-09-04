@@ -35,13 +35,19 @@ fn slack() -> Decimal {
 }
 
 /// What the charge would be with the tip we usually leave: 13% of the total, or
-/// 15% of the pre-tax subtotal. Restaurant receipts print before the tip, so
+/// 15% of the pre-tax figure. Restaurant receipts print before the tip, so
 /// without these every meal falls through to a manual match.
+///
+/// The pre-tax figure is `total - tax`, not the printed subtotal, which on an
+/// invoice may cover only the goods. The two are equal on a restaurant receipt.
+/// One with no subtotal still gets no second guess, hence the filter.
 fn with_tip(receipt: &dto::Receipt) -> impl Iterator<Item = Decimal> {
+    let tax = receipt.tax.unwrap_or_default();
     let on_total = receipt.total.map(|total| total * Decimal::new(113, 2));
     let on_subtotal = receipt
-        .subtotal
-        .map(|subtotal| subtotal * Decimal::new(115, 2) + receipt.tax.unwrap_or_default());
+        .total
+        .filter(|_| receipt.subtotal.is_some())
+        .map(|total| (total - tax) * Decimal::new(115, 2) + tax);
     [on_total, on_subtotal].into_iter().flatten()
 }
 
@@ -88,14 +94,14 @@ impl Fit {
         match self {
             Self::Exact => Some("exact amount"),
             Self::UsualTip => Some("plus the usual tip"),
-            Self::UnusualTip => Some("under the charge — a tip?"),
+            Self::UnusualTip => Some("under the charge, a tip?"),
             Self::Unrelated => None,
         }
     }
 }
 
 /// Best first. `description` is the statement's own line for the charge, and
-/// `available` the receipts not already spoken for — which is also as far as a
+/// `available` the receipts not already spoken for, which is also as far as a
 /// misread date can be rescued from, nothing outside it being seen at all.
 pub fn candidates<'a>(
     charged_on: jiff::civil::Date,
@@ -124,7 +130,7 @@ pub fn candidates<'a>(
             let same_merchant = line.names(&receipt.merchant);
 
             // A date outside the window is either a different purchase or one the
-            // extractor misread, and only the merchant tells them apart — with
+            // extractor misread, and only the merchant tells them apart, with
             // the amount to back it, or every visit to a regular haunt would be
             // offered for every charge there.
             if !in_window && !(same_merchant && fit != Fit::Unrelated) {
@@ -132,7 +138,7 @@ pub fn candidates<'a>(
             }
 
             // Two things have to agree before a receipt is taken unasked. The
-            // date is one, the amount the other — unless it's only close enough
+            // date is one, the amount the other, unless it's only close enough
             // for a tip, when the merchant makes up the difference.
             let confident = match fit {
                 Fit::Exact | Fit::UsualTip => in_window,
@@ -201,7 +207,7 @@ fn days_apart(days: i32) -> String {
 /// The receipt to attach without asking: one confident candidate and no other,
 /// or one the statement also names.
 ///
-/// Two receipts that both fit on the amount alone are left alone deliberately —
+/// Two receipts that both fit on the amount alone are left alone deliberately:
 /// picking either would be a coin toss, and the wrong one puts the money on the
 /// wrong person while every total still balances. The merchant is what turns
 /// that coin toss into an answer.
@@ -299,11 +305,8 @@ mod tests {
         assert!(offered[0].confident, "{:?}", offered[0].why);
         assert_eq!(automatic(&offered), Some(receipts[0].id));
 
-        // 15% of the pre-tax subtotal, plus the tax.
-        let mut with_tax = receipt(10, "48.00");
-        with_tax.subtotal = Some(dec("44.00"));
-        with_tax.tax = Some(dec("4.00"));
-        let offered = offers("54.60", std::slice::from_ref(&with_tax));
+        // 15% of the pre-tax figure, plus the tax.
+        let offered = offers("54.60", &[taxed(Some("44.00"))]);
         assert!(offered[0].confident, "{:?}", offered[0].why);
 
         // A few cents off a rounded-up tip still counts.
@@ -311,7 +314,40 @@ mod tests {
         assert!(offered[0].confident, "{:?}", offered[0].why);
     }
 
-    /// An unusual tip is offered but never taken automatically — the difference
+    /// A 48.00 meal with 4.00 of tax in it, whatever its subtotal says.
+    fn taxed(subtotal: Option<&str>) -> dto::Receipt {
+        dto::Receipt {
+            subtotal: subtotal.map(dec),
+            tax: Some(dec("4.00")),
+            ..receipt(10, "48.00")
+        }
+    }
+
+    /// The pre-tax figure comes from `total - tax`, so a subtotal covering only
+    /// the goods, or one the model got wrong, can't move the tip guess: both of
+    /// these are still worked out from 44.00.
+    #[test]
+    fn the_tip_guess_ignores_what_the_subtotal_says() {
+        for subtotal in ["40.00", "0.01"] {
+            let offered = offers("54.60", &[taxed(Some(subtotal))]);
+            assert!(
+                offered[0].confident,
+                "subtotal {subtotal}: {:?}",
+                offered[0].why
+            );
+        }
+    }
+
+    /// Only a receipt that printed a subtotal gets the pre-tax guess. Without
+    /// one, 54.60 is merely an unusual tip on the 48.00 total, so the receipt is
+    /// offered but not taken unasked.
+    #[test]
+    fn no_subtotal_still_means_no_pre_tax_candidate() {
+        let offered = offers("54.60", &[taxed(None)]);
+        assert!(!offered[0].confident, "{:?}", offered[0].why);
+    }
+
+    /// An unusual tip is offered but never taken automatically: the difference
     /// could as easily be a different purchase.
     #[test]
     fn an_amount_over_the_total_is_only_a_suggestion() {
@@ -366,7 +402,7 @@ mod tests {
     }
 
     /// The date the extractor read is the one thing that can be flatly wrong, and
-    /// a receipt nowhere near the charge used to be invisible — findable only
+    /// a receipt nowhere near the charge used to be invisible: findable only
     /// through the list of every receipt going spare.
     #[test]
     fn a_merchant_the_statement_names_rescues_a_misread_date() {
@@ -446,7 +482,7 @@ mod tests {
     }
 
     /// Receipts in the window that explain none of the charge are still worth
-    /// offering — they're what "pick a receipt" starts from — but ranked last.
+    /// offering: they're what "pick a receipt" starts from, but ranked last.
     #[test]
     fn closer_amounts_outrank_bare_coincidence() {
         let receipts = [receipt(10, "9.00"), receipt(9, "35.36")];

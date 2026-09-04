@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 use uuid::Uuid;
 
-/// The `:id` out of the path, if it is a uuid at all — `None` covers both a
+/// The `:id` out of the path, if it is a uuid at all, `None` covers both a
 /// missing segment and a malformed one, which a screen reports the same way.
 ///
 /// Hands back a closure rather than a value so it stays reactive: a resource

@@ -1,6 +1,6 @@
 //! Inline SVG, so there's no icon font or sprite sheet to fetch.
 //!
-//! Each takes an optional `class` for whatever the caller needs on top —
+//! Each takes an optional `class` for whatever the caller needs on top:
 //! alignment, mostly.
 
 use leptos::prelude::*;

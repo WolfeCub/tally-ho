@@ -15,9 +15,9 @@ const MOST_ITEMS: usize = 20;
 
 /// Splits a refund between whoever bought what went back.
 ///
-/// When nothing adds up — a partial refund of a receiptless charge, a receipt
-/// still being read — it comes off everyone in the proportions the purchase was
-/// split in, which is the best that's left.
+/// When nothing adds up, as with a partial refund of a receiptless charge or a
+/// receipt still being read, it comes off everyone in the proportions the
+/// purchase was split in, which is the best that's left.
 ///
 /// `amount` is negative, like the charge it came from. `purchase` is what the
 /// card was charged for it, `items` are off its receipt, `split` is how it went.
@@ -78,7 +78,7 @@ fn went_back<'a>(
 ///
 /// Overshooting prunes everything below it, which is what keeps this from
 /// walking every combination. A receipt with a coupon on it can overshoot and
-/// come back down, so one of those may find nothing — and a refund nothing
+/// come back down, so one of those may find nothing, and a refund nothing
 /// explains falls back to proportions, which is the safe way to be wrong.
 fn adding_up(target: Decimal, slack: Decimal, items: &[LineItem]) -> Option<Vec<&LineItem>> {
     if target.abs() <= slack {
@@ -163,7 +163,7 @@ mod tests {
         );
     }
 
-    /// An amount no set of items explains — a partial refund, a restocking fee
+    /// An amount no set of items explains: a partial refund, a restocking fee
     /// off the top. Proportions are all that's left, and they still add up.
     #[test]
     fn an_amount_nothing_explains_falls_back_to_proportions() {

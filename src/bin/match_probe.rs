@@ -7,9 +7,9 @@
 //!
 //! The unit tests cover the matching rules against fixtures. This covers the
 //! part they can't: the pool. A charge matches nothing for reasons that are
-//! invisible on the reconcile screen — the statement is in a currency none of
+//! invisible on the reconcile screen: the statement is in a currency none of
 //! your receipts are in, the receipt sits outside the date range the pool is
-//! drawn from, or an earlier statement already spoke for it — and all three
+//! drawn from, or an earlier statement already spoke for it, and all three
 //! look identical to a matcher that simply didn't find anything.
 //!
 //! It calls [`queries::statements::pool`] rather than working the pool out for
@@ -55,10 +55,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let free = queries::statements::pool(&mut db, begins_on, ends_on).await?;
         println!("  pool: {} receipts", free.len());
-        // Worth saying out loud: every charge below will match nothing, and the
+        // Worth saying out loud, every charge below will match nothing, and the
         // screen gives no hint as to why.
         if free.is_empty() {
-            println!("  nothing to match against — wrong dates, or all spoken for");
+            println!("  nothing to match against, wrong dates, or all spoken for");
         }
 
         // Same walk as the importer: a receipt it proposes is gone for the
@@ -94,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     _ => "offered",
                 };
                 println!(
-                    "      {mark:>9}  {}  {} {} — {}",
+                    "      {mark:>9}  {}  {} {}, {}",
                     &candidate.receipt_id.to_string()[..8],
                     candidate.merchant,
                     candidate.total,

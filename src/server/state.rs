@@ -25,14 +25,14 @@ pub struct AppState {
     /// Where an upload hands its receipt off to be read, one at a time.
     pub jobs: job::Queue,
     /// The ISO code imported statements are in, and what a receipt is taken to
-    /// be in until something says otherwise. One card, one currency — so it's
+    /// be in until something says otherwise. One card, one currency, so it's
     /// deployment config rather than a question on every upload.
     pub default_currency: String,
 }
 
 impl AppState {
     pub async fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
-        let config = Config::from_env();
+        let config = Config::load().await;
         let assigning = assign::Config::from_extraction(&config);
         let default_currency = default_currency_from_env()?;
         tracing::info!(
@@ -74,9 +74,7 @@ pub fn default_currency_from_env() -> Result<String, Box<dyn std::error::Error>>
         .to_uppercase();
 
     if iso_currency::Currency::from_code(&code).is_none() {
-        return Err(
-            format!("CURRENCY={code:?} isn't an ISO currency code — try CAD or USD").into(),
-        );
+        return Err(format!("CURRENCY={code:?} isn't an ISO currency code, try CAD or USD").into());
     }
     Ok(code)
 }

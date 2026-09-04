@@ -12,7 +12,7 @@ use super::CHIP;
 /// that looks like the browser's instead of the app's.
 ///
 /// Read and write are separate halves so the state can live wherever suits the
-/// screen — an `RwSignal`, which satisfies both, or the URL.
+/// screen: an `RwSignal`, which satisfies both, or the URL.
 #[component]
 pub fn Toggle(
     label: &'static str,

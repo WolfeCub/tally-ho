@@ -13,27 +13,39 @@ pub fn db() -> toasty::Db {
     expect_context::<AppState>().db.clone()
 }
 
-/// The one file field a form sent, with whatever the browser called it.
+/// Every file a form sent under `name`, in the order the browser wrote them,
+/// each with whatever it called them.
 ///
-/// Any other field is ignored rather than trusted, and the bytes come back empty
-/// if `name` never turned up — which the callers report in their own words.
-pub async fn one_file(data: MultipartData, name: &str) -> (Option<String>, Vec<u8>) {
+/// Any other field is ignored rather than trusted.
+pub async fn all_files(data: MultipartData, name: &str) -> Vec<(Option<String>, Vec<u8>)> {
     // `into_inner()` is always `Some` on the server.
     let mut data = data.into_inner().expect("multipart data on the server");
 
-    let mut filename = None;
-    let mut bytes = Vec::new();
+    let mut files = Vec::new();
     while let Ok(Some(mut field)) = data.next_field().await {
         if field.name() != Some(name) {
             continue;
         }
-        filename = field.file_name().map(str::to_string);
+        let filename = field.file_name().map(str::to_string);
+        let mut bytes = Vec::new();
         while let Ok(Some(chunk)) = field.chunk().await {
             bytes.extend_from_slice(&chunk);
         }
-        break;
+        files.push((filename, bytes));
     }
-    (filename, bytes)
+    files
+}
+
+/// The one file field a form sent, with whatever the browser called it.
+///
+/// The bytes come back empty if `name` never turned up, which the callers
+/// report in their own words.
+pub async fn one_file(data: MultipartData, name: &str) -> (Option<String>, Vec<u8>) {
+    all_files(data, name)
+        .await
+        .into_iter()
+        .next()
+        .unwrap_or_default()
 }
 
 /// How every server function ends: an error the screen can show.

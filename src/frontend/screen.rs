@@ -2,8 +2,8 @@
 //! answer, the fact there isn't one, or why it couldn't.
 //!
 //! A `Transition` in every case, never a `Suspense`. Each of these screens
-//! refetches while you're looking at it — polling while a receipt is read,
-//! reloading after a decision — and a `Suspense` fallback would blank the
+//! refetches while you're looking at it, polling while a receipt is read,
+//! reloading after a decision, and a `Suspense` fallback would blank the
 //! content every time.
 
 use std::future::Future;

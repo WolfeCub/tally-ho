@@ -1,7 +1,7 @@
 //! Whether a statement line and a receipt name the same merchant.
 //!
-//! Statements mangle the name — "SQ *BLUE BOTTLE, SEATTLE WA" for a receipt
-//! printed "Blue Bottle Coffee" — so the two are never compared whole. One
+//! Statements mangle the name: "SQ *BLUE BOTTLE, SEATTLE WA" for a receipt
+//! printed "Blue Bottle Coffee", so the two are never compared whole. One
 //! distinguishing word in common is enough; the rest of the line is address,
 //! store number and processor noise.
 

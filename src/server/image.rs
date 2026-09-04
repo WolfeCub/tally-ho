@@ -1,6 +1,6 @@
 //! Receipt photo pre-processing.
 //!
-//! Not an optimization — a required step. A full-resolution phone photo would
+//! Not an optimization: a required step. A full-resolution phone photo would
 //! blow out both the model's context and VRAM, and Ollama's image decoder is
 //! narrow (it will not take webp), so everything is normalized to a modest JPEG
 //! before it reaches the model. The original file is kept on disk untouched.
@@ -37,7 +37,7 @@ pub fn prepare(bytes: &[u8], max_edge: u32) -> Result<Prepared, ImageError> {
     let (width, height) = (scaled.width(), scaled.height());
 
     // JPEG has no alpha channel, and a lossless webp or PNG screenshot will
-    // often be RGBA — encoding that directly fails.
+    // often be RGBA: encoding that directly fails.
     let rgb = scaled.to_rgb8();
 
     let mut jpeg = Vec::new();

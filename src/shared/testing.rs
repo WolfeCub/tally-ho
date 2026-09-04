@@ -111,7 +111,7 @@ pub fn receipt(total: Option<&str>, items: Vec<LineItem>) -> crate::shared::dto:
         status: ExtractionStatus::Done,
         extraction_error: None,
         reviewed: false,
-        has_photo: true,
+        document: Some(crate::shared::dto::Document::Photo),
         line_items: items,
     }
 }

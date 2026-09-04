@@ -1,4 +1,4 @@
-//! The pieces the screens are built from — anything more than one screen needs,
+//! The pieces the screens are built from: anything more than one screen needs,
 //! or that would otherwise bury a screen's own markup.
 
 mod bar;
@@ -14,8 +14,8 @@ mod toggle;
 pub use bar::Bar;
 pub use form::{LabeledInput, confirm, field, form_element, upload_action, uploads_to};
 pub use icons::{CameraIcon, InfoIcon, PencilIcon, Spinner, Verdict};
-pub use notice::{Notice, Tone, error_notice, failed, loading};
-pub use photo::ReceiptPhoto;
+pub use notice::{Notice, Problems, Tone, error_notice, failed, loading};
+pub use photo::ReceiptDocument;
 pub use picker::FuzzyPick;
 pub use receipt_rows::ReceiptRows;
 pub use steps::StepBar;

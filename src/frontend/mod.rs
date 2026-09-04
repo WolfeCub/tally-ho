@@ -1,7 +1,7 @@
 //! The UI. Rendered on the server first and hydrated in the browser, so all of
 //! it compiles for both targets.
 //!
-//! A module per screen — capture, receipts, review, reconcile, settings — and
+//! A module per screen (capture, receipts, review, reconcile, settings), and
 //! the rest is bits more than one of them needs.
 
 mod actions;

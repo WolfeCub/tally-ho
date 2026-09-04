@@ -1,8 +1,8 @@
-//! Capture and review: uploading a photo, polling while it is read, and saving
-//! the corrections a human makes.
+//! Capture and review: uploading what a receipt is read from, polling while it
+//! is read, and saving the corrections a human makes.
 
 use leptos::prelude::*;
-use leptos::server_fn::codec::{MultipartData, MultipartFormData};
+use leptos::server_fn::codec::{Json, MultipartData, MultipartFormData};
 use uuid::Uuid;
 
 use crate::shared::dto;
@@ -10,40 +10,71 @@ use crate::shared::dto;
 // Server-only, so these are behind a `cfg` rather than plain imports.
 #[cfg(feature = "ssr")]
 use {
-    super::support::{Reported as _, db, one_file},
+    super::support::{Reported as _, all_files, db},
     crate::server::queries::receipts,
     crate::server::state::AppState,
     crate::shared::parse,
 };
 
-/// Stores an uploaded photo, creates the receipt row, and kicks off extraction.
+/// Stores whatever was uploaded, creates a receipt row for each, and queues them
+/// all for extraction.
 ///
-/// Returns as soon as the row exists — extraction runs in the background, so the
-/// caller should poll [`receipt_status`].
+/// One entry point for a photo off the camera and for a batch of PDF invoices,
+/// because a form can carry both: the capture screen has a camera picker and a
+/// file picker, and either may hold something. Returns as soon as the rows
+/// exist: the queue reads them one at a time in the background.
+///
+/// A file that can't be stored is named in the result rather than failing the
+/// batch: one unreadable download shouldn't cost you the other nine.
 #[server(input = MultipartFormData)]
-pub async fn upload_receipt(data: MultipartData) -> Result<Uuid, ServerFnError> {
+pub async fn upload_receipts(data: MultipartData) -> Result<dto::Uploaded, ServerFnError> {
     let state = expect_context::<AppState>();
+    let mut db = state.db.clone();
+    let today = jiff::Zoned::now().date();
 
-    let (_, bytes) = one_file(data, "receipt").await;
-    if bytes.is_empty() {
-        return Err(ServerFnError::new("no image was uploaded"));
+    // A file input nobody touched still sends an empty part, and with two of them
+    // on the form there is always at least one. Dropping them here is what makes
+    // "nothing was picked" mean nothing was picked.
+    let files: Vec<_> = all_files(data, "receipts")
+        .await
+        .into_iter()
+        .filter(|(_, bytes)| !bytes.is_empty())
+        .collect();
+
+    if files.is_empty() {
+        return Err(ServerFnError::new("nothing was uploaded"));
     }
 
-    let today = jiff::Zoned::now().date();
-    let image_path = state
-        .store
-        .write_upload(&bytes, today)
+    let mut uploaded = dto::Uploaded::default();
+    for (name, bytes) in files {
+        let name = name.unwrap_or_else(|| "unnamed file".to_string());
+
+        let stored = match state.store.write_upload(&bytes, today).await {
+            Ok(stored) => stored,
+            Err(e) => {
+                uploaded.rejected.push(format!("{name}: {e}"));
+                continue;
+            }
+        };
+
+        let id = receipts::create(&mut db, Some(&stored), today, &state.default_currency)
+            .await
+            .reported_as("could not create receipt")?;
+
+        state.jobs.push(id);
+        uploaded.receipt_ids.push(id);
+    }
+
+    Ok(uploaded)
+}
+
+/// The receipts an upload made, as they now stand. Poll target while the queue
+/// works through a batch of them.
+#[server(input = Json)]
+pub async fn uploaded_receipts(ids: Vec<Uuid>) -> Result<Vec<dto::ReceiptSummary>, ServerFnError> {
+    receipts::summaries_of(&mut db(), &ids)
         .await
-        .reported_as("could not store image")?;
-
-    let mut db = state.db.clone();
-    let id = receipts::create(&mut db, Some(&image_path), today, &state.default_currency)
-        .await
-        .reported_as("could not create receipt")?;
-
-    state.jobs.push(id);
-
-    Ok(id)
+        .reported_as("could not load the receipts")
 }
 
 /// Creates a blank receipt with no photo, to be typed in by hand.
@@ -96,7 +127,7 @@ pub async fn get_receipt(id: Uuid) -> Result<dto::Receipt, ServerFnError> {
     load_receipt(&mut db(), id).await
 }
 
-/// Applies the review screen's corrections — the receipt's own fields and the
+/// Applies the review screen's corrections: the receipt's own fields and the
 /// line items as the human left them.
 #[server]
 pub async fn save_receipt(save: dto::ReceiptSave) -> Result<dto::Receipt, ServerFnError> {
@@ -129,7 +160,7 @@ fn optional_money(field: &str, raw: &str) -> Result<Option<rust_decimal::Decimal
 fn parse_save(save: dto::ReceiptSave) -> Result<receipts::Save, ServerFnError> {
     let purchased_on = parse::date(&save.purchased_on).ok_or_else(|| {
         ServerFnError::new(format!(
-            "could not read {:?} as a date — try YYYY-MM-DD or MM/DD/YY",
+            "could not read {:?} as a date, try YYYY-MM-DD or MM/DD/YY",
             save.purchased_on
         ))
     })?;

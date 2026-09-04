@@ -24,7 +24,7 @@ pub trait Rows<T> {
     /// Applies `edit` to one row, if it is still there.
     fn edit(&self, key: usize, edit: impl FnOnce(&mut T));
 
-    /// One field of one row, following whatever changes it — a button that
+    /// One field of one row, following whatever changes it: a button that
     /// rewrites the whole list, not just the input next to it. The default once
     /// the row is gone.
     ///

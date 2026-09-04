@@ -2,7 +2,7 @@
 //!
 //! Cards disagree on what the columns are called and what order they come in,
 //! so they're found by header name rather than per issuer. Which ones got picked
-//! comes back in the [`Layout`] for the import screen to show — a wrong guess
+//! comes back in the [`Layout`] for the import screen to show: a wrong guess
 //! has to be visible, or it exports a statement that quietly doesn't add up.
 //!
 //! Amounts are taken as written: positive is a purchase, negative a refund.
@@ -31,10 +31,10 @@ const AMOUNT: &[&str] = &["transaction amount", "amount", "total", "value"];
 pub enum ParseError {
     #[error(
         "could not find date, description and amount columns in the first \
-         {HEADER_SEARCH_ROWS} rows — is this the CSV your card exports?"
+         {HEADER_SEARCH_ROWS} rows: is this the CSV your card exports?"
     )]
     NoColumns,
-    #[error("no charges could be read — {0}")]
+    #[error("no charges could be read: {0}")]
     NoCharges(String),
     #[error("could not read the file as CSV: {0}")]
     Csv(#[from] csv::Error),
@@ -151,7 +151,7 @@ pub struct Parsed {
     pub charges: Vec<ParsedCharge>,
     pub layout: Layout,
     /// Rows read but not understood, and why. Surfaced rather than dropped
-    /// quietly — a missing row is a statement that won't reconcile.
+    /// quietly: a missing row is a statement that won't reconcile.
     pub skipped: Vec<String>,
 }
 
@@ -180,7 +180,7 @@ fn normalize(header: &str) -> String {
 
 /// Reads the charges out of an uploaded CSV.
 pub fn charges(bytes: &[u8]) -> Result<Parsed, ParseError> {
-    // Bank exports aren't reliably UTF-8 — accented merchant names arrive as
+    // Bank exports aren't reliably UTF-8: accented merchant names arrive as
     // Windows-1252. Lossy, because a mangled character in a description is
     // nothing next to refusing the file.
     let text = String::from_utf8_lossy(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes));

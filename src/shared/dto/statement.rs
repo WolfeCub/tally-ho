@@ -40,7 +40,7 @@ pub struct Candidate {
     pub purchased_on: jiff::civil::Date,
     pub total: Decimal,
     pub currency: String,
-    /// Why it's being offered — "exact amount", "same day".
+    /// Why it's being offered: "exact amount", "same day".
     pub why: String,
     /// The statement's line for the charge names this merchant. Only ever
     /// evidence for the receipt: most lines name nothing recognisable, so a
@@ -58,7 +58,7 @@ pub struct Matched {
     pub merchant: String,
     pub purchased_on: jiff::civil::Date,
     /// The receipt's own total. It won't equal the charge when a tip was added,
-    /// which is fine — the charge is what gets split.
+    /// which is fine: the charge is what gets split.
     pub total: Option<Decimal>,
     pub status: ExtractionStatus,
     pub reviewed: bool,
@@ -96,7 +96,7 @@ pub enum Resolution {
     Proposed(Matched),
     /// A human said this receipt pays for this charge.
     Confirmed(Matched),
-    /// Deliberately receiptless — a subscription, a fee, interest. `None` splits
+    /// Deliberately receiptless: a subscription, a fee, interest. `None` splits
     /// it evenly.
     NoReceipt { person_id: Option<Uuid> },
     /// Money back on a purchase already on the card. The purchase's receipt says
@@ -124,7 +124,7 @@ impl Resolution {
 /// What a human decided about one charge.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum Resolve {
-    /// This receipt pays for it. Also how a proposal is agreed to — the client
+    /// This receipt pays for it. Also how a proposal is agreed to: the client
     /// names the receipt it actually saw, so there's no guessing which.
     Receipt(Uuid),
     /// No receipt is coming. `None` splits it evenly.
@@ -164,7 +164,7 @@ pub struct Charge {
     /// Purchases this refund might be reversing, best first. Only filled in for
     /// an unresolved refund.
     pub refundable: Vec<Refundable>,
-    /// What the refunds pointing here add up to — negative, and zero for the
+    /// What the refunds pointing here add up to, negative, and zero for the
     /// charges nothing has come back off.
     pub came_back: Decimal,
     /// The rest of what the file said about this row, in its column order.
@@ -172,8 +172,8 @@ pub struct Charge {
     /// What each person owes, in [`Statement::people`] order. Empty while
     /// nothing accounts for the charge.
     ///
-    /// Filled in for a proposal too — seeing the figures is how you decide
-    /// whether to agree — but left out of the totals and the export until it's
+    /// Filled in for a proposal too, seeing the figures is how you decide
+    /// whether to agree, but left out of the totals and the export until it's
     /// confirmed.
     pub split: Vec<Share>,
 }

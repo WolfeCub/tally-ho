@@ -3,9 +3,9 @@
 // server-side.
 #![recursion_limit = "256"]
 
-/// Serves the stored receipt photo for the review screen.
+/// Serves the stored photo or PDF a receipt was read from, for the review screen.
 ///
-/// Not a server function: this returns raw image bytes, not a serialized value.
+/// Not a server function: this returns raw file bytes, not a serialized value.
 /// The path is read from the database and the filename was generated at upload,
 /// so nothing user-controlled reaches the filesystem.
 #[cfg(feature = "ssr")]
@@ -31,6 +31,7 @@ async fn receipt_image(
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("gif") => "image/gif",
+        Some("pdf") => "application/pdf",
         _ => "application/octet-stream",
     };
 

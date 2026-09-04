@@ -12,7 +12,7 @@ pub struct DiskUsage {
     pub path: String,
     pub total_bytes: u64,
     /// What's actually still writable here, which on ext4 is a few percent short
-    /// of unused — the rest is reserved for root. So `total - available` reads a
+    /// of unused: the rest is reserved for root. So `total - available` reads a
     /// little high against `df`, and errs the safe way for a gauge whose job is
     /// to warn.
     pub available_bytes: u64,
