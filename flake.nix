@@ -39,7 +39,7 @@
           pkgs.tailwindcss_4
           pkgs.binaryen # wasm-opt
           # Keep in sync with the wasm-bindgen pin in Cargo.toml.
-          pkgs.wasm-bindgen-cli_0_2_126
+          pkgs.wasm-bindgen-cli_0_2_129
         ];
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
@@ -171,6 +171,7 @@
               rustToolchain
               pkgs.sqlite
               pkgs.bacon
+              pkgs.cargo-edit
               pkgs.pre-commit
             ]
             ++ leptosTools;

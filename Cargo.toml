@@ -15,48 +15,48 @@ leptos_meta = "0.8"
 # Shared: these appear in DTOs that cross the wire, so they compile for wasm32.
 serde = { version = "1.0", features = ["derive"] }
 jiff = { version = "0.2", features = ["serde"] }
-rust_decimal = { version = "1.41", features = ["serde"] }
+rust_decimal = { version = "1.43", features = ["serde"] }
 # Currency symbols and minor units for display.
-iso_currency = "0.5"
+iso_currency = "0.7"
 # No `v4`/`v7`: the client only parses ids, and those need a wasm randomness
 # source.
-uuid = { version = "1.24", features = ["serde"] }
+uuid = { version = "1.28", features = ["serde"] }
 # Already in the tree via leptos. Named here only for `FileList`, which is how
 # the capture screen counts what you picked before it uploads.
 web-sys = { version = "0.3", features = ["FileList"] }
 
 # Server-only, hence `optional` + the `ssr` feature below. Most of these will not
 # build for wasm32 at all.
-toasty = { version = "0.10", features = ["sqlite", "jiff", "rust_decimal", "serde", "migration"], optional = true }
-toasty-cli = { version = "0.10", optional = true }
+toasty = { version = "0.11", features = ["sqlite", "jiff", "rust_decimal", "serde", "migration"], optional = true }
+toasty-cli = { version = "0.11", optional = true }
 axum = { version = "0.8", optional = true }
 leptos_axum = { version = "0.8", optional = true }
-tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "fs"], optional = true }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "time", "fs"], optional = true }
 serde_json = { version = "1.0", optional = true }
-csv = { version = "1.3", optional = true }
+csv = { version = "1.4", optional = true }
 async-trait = { version = "0.1", optional = true }
 anyhow = { version = "1.0", optional = true }
 thiserror = { version = "2", optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
-rig-core = { version = "0.44", features = ["reqwest"], optional = true }
-rig-agent = { version = "0.44", optional = true }
-schemars = { version = "1.0", optional = true }
+rig-core = { version = "0.45", features = ["reqwest"], optional = true }
+rig-agent = { version = "0.45", optional = true }
+schemars = { version = "1.2", optional = true }
 # Default features include webp, which phone photos arrive as.
 image = { version = "0.25", optional = true }
 kamadak-exif = { version = "0.6", optional = true }
-base64 = { version = "0.22", optional = true }
+base64 = { version = "0.23", optional = true }
 pdf-extract = { version = "0.12", optional = true }
 # `statvfs` in bytes, for the room left on the volume the data sits on. Not the
 # `nix` crate: this one builds on Windows too, and is already in the tree.
-fs4 = { version = "0.13", default-features = false, features = ["sync"], optional = true }
+fs4 = { version = "1.1", default-features = false, features = ["sync"], optional = true }
 
 # Client-only.
 console_error_panic_hook = { version = "0.1", optional = true }
 # Pinned: the wasm-bindgen CLI cargo-leptos runs has to match this exactly, and
-# it can't fetch one. Bump `wasm-bindgen-cli_0_2_126` in flake.nix to match.
-wasm-bindgen = { version = "=0.2.126", optional = true }
+# it can't fetch one. Bump `wasm-bindgen-cli_0_2_129` in flake.nix to match.
+wasm-bindgen = { version = "=0.2.129", optional = true }
 
 [features]
 # Neither is default on purpose: the lib is built twice, once per target, and a
