@@ -76,13 +76,19 @@ Go through the items one at a time. There are two ways an item is somebody's, an
 either one is enough.
 
 Their own description fits the item. That settles it on its own, whether or not \
-anybody else is ruled out.
+anybody else is ruled out. Only something they like, do or buy can fit: a diet or \
+anything else they avoid never makes an item theirs. Food a vegetarian can eat \
+suits everybody, so it is not the vegetarian's.
 
 Or every other person is ruled out for it, which settles it just as well, and you \
 don't also need something saying they're the one who buys that sort of thing. \
 Somebody is ruled out when the item is at odds with their description, and what \
 somebody does, avoids or can't have covers everything of that kind rather than \
-only the words it uses.
+only the words it uses. The item has to plainly contain what they avoid: a \
+vegetarian is ruled out by meat or fish, not by chips, cheese, bread or sweets.
+
+Go on what the item plainly is. An abbreviation you can't read with confidence \
+is null, and so is an item that only shares a word with somebody's description.
 
 Anything else is null, which is the answer for everyday and household things.
 
