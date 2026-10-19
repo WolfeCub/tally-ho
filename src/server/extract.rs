@@ -62,13 +62,11 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// What the model is asked to produce.
 ///
-/// Every money and date field comes back a **string**, deliberately. A local
-/// model will write "$4.99", "4,99" or "1 234.56", and a typed `number`/`Decimal`
-/// schema would either reject the whole payload or silently coerce through a
-/// float. Strings move parsing somewhere we can report on it field by field: see
-/// [`ExtractedReceipt::normalize`].
-///
-/// The model may still *write* an amount as a bare number: see [`Amount`].
+/// Every money and date field is kept as text, deliberately. A local model will
+/// write "$4.99", "4,99" or "1 234.56", and a typed `number`/`Decimal` schema
+/// would either reject the whole payload or silently coerce through a float.
+/// Text moves parsing somewhere we can report on it field by field: see
+/// [`ExtractedReceipt::normalize`] and [`Amount`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ExtractedReceipt {
     /// Store or merchant name exactly as printed.

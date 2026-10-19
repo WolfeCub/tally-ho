@@ -125,7 +125,7 @@ pub async fn once(agent: &Agent, message: Message, timeout: Duration) -> Result<
         .completion_calls
         .last()
         .and_then(|call| call.finish_reason.as_ref());
-    if stopped == Some(&FinishReason::Length) {
+    if matches!(stopped, Some(FinishReason::Length)) {
         return Err(Error::Truncated);
     }
 
