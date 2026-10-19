@@ -6,7 +6,7 @@
 //! polls `receipt_status`.
 //!
 //! One receipt is read at a time. Two of these in flight are two photos and two
-//! models against one GPU: Ollama serializes past its own parallel limit
+//! models against one GPU: llama-server serializes past its own slot count
 //! anyway, so a second receipt makes both slow rather than either one fast, and
 //! at worst evicts a model mid-run. Queued receipts sit in
 //! [`ExtractionStatus::Pending`] until their turn, which is what the capture
@@ -96,7 +96,8 @@ async fn run(state: &AppState, receipt_id: Uuid) -> Result<(), JobError> {
 
     let bytes = state.store.read(&image_path).await?;
     let extraction = state.extractor.extract(&bytes).await?;
-    let n = extraction.receipt.normalize();
+    let today = jiff::Zoned::now().date();
+    let n = extraction.receipt.normalize(today);
 
     tracing::info!(
         %receipt_id,
@@ -117,7 +118,7 @@ async fn run(state: &AppState, receipt_id: Uuid) -> Result<(), JobError> {
         // `purchased_on` falls back to today only so the row stays queryable in
         // a period; a wrong-but-plausible date is exactly why the review screen
         // flags anything with warnings.
-        purchased_on: n.purchased_on.unwrap_or_else(|| jiff::Zoned::now().date()),
+        purchased_on: n.purchased_on.unwrap_or(today),
         // Receipts often don't print a currency, and one in the wrong currency
         // matches no charge at all. So fall back to what the statements are in
         // rather than to a guess.

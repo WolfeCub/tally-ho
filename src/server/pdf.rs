@@ -1,7 +1,7 @@
 //! The text layer of a PDF invoice.
 //!
-//! Ollama takes images or text and nothing else, so a PDF has to become one of
-//! them first. A vendor-generated invoice carries its own text, exact where a
+//! The model takes images or text and nothing else, so a PDF has to become one
+//! of them first. A vendor-generated invoice carries its own text, exact where a
 //! transcription would be a guess. A scan has none and stops here.
 
 /// How far in to look for the header. The spec allows junk in front of it, and

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use super::assign::{self, ItemAssigner, OllamaAssigner};
-use super::extract::{Config, OllamaExtractor, ReceiptExtractor};
+use super::assign::{self, ItemAssigner, LlamaAssigner};
+use super::extract::{Config, LlamaExtractor, ReceiptExtractor};
 use super::job;
 use super::store::Store;
 
@@ -15,7 +15,7 @@ const DEFAULT_CURRENCY: &str = "CAD";
 #[derive(Clone)]
 pub struct AppState {
     pub db: toasty::Db,
-    /// A trait object, so the rig/Ollama implementation can be swapped for a
+    /// A trait object, so the rig/llama.cpp implementation can be swapped for a
     /// fake in tests or a hosted model later without touching call sites.
     pub extractor: Arc<dyn ReceiptExtractor>,
     /// Guesses who owes what from everyone's description. Same reason for the
@@ -32,14 +32,13 @@ pub struct AppState {
 
 impl AppState {
     pub async fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
-        let config = Config::load().await;
+        let config = Config::from_env();
         let assigning = assign::Config::from_extraction(&config);
         let default_currency = default_currency_from_env()?;
         tracing::info!(
             model = %config.label(),
             url = %config.url,
             max_image_edge = config.max_image_edge,
-            ocr_context = config.ocr_context,
             %default_currency,
             "extraction configured"
         );
@@ -48,8 +47,8 @@ impl AppState {
         let (jobs, worker) = job::queue();
         let state = Self {
             db: crate::server::db::connect().await?,
-            extractor: Arc::new(OllamaExtractor::new(config)?),
-            assigner: Arc::new(OllamaAssigner::new(assigning)?),
+            extractor: Arc::new(LlamaExtractor::new(config)),
+            assigner: Arc::new(LlamaAssigner::new(assigning)),
             store: Arc::new(Store::from_env()),
             jobs,
             default_currency,

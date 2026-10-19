@@ -12,9 +12,8 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use rig_agent::agent::{Agent, OutputMode};
+use rig_agent::Agent;
 use rig_core::message::Message;
-use rig_core::providers::ollama;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -59,7 +58,7 @@ pub struct Guess {
     pub why: String,
 }
 
-/// Ollama drops schema `description` fields when it compiles the grammar, so
+/// The server drops schema `description` fields when it compiles the grammar, so
 /// what the fields mean has to be said here. Same reason as in
 /// [`crate::server::extract`].
 const PROMPT: &str = "\
@@ -106,51 +105,43 @@ pub trait ItemAssigner: Send + Sync {
 pub struct Config {
     pub url: String,
     pub model: String,
-    pub keep_alive: Option<String>,
 }
 
 impl Config {
-    /// Shares Ollama with extraction, and by default its model too: the one that
-    /// structures a receipt is already a general text model. Override with
-    /// `OLLAMA_ASSIGN_MODEL`.
+    /// Shares the server with extraction, and by default its model too: the one
+    /// that structures a receipt is already a general text model. Override with
+    /// `LLAMA_ASSIGN_MODEL`.
     pub fn from_extraction(extraction: &extract::Config) -> Self {
         Self {
             url: extraction.url.clone(),
-            model: crate::server::env::string("OLLAMA_ASSIGN_MODEL", &extraction.model),
-            keep_alive: extraction.keep_alive.clone(),
+            model: crate::server::env::string("LLAMA_ASSIGN_MODEL", &extraction.model),
         }
     }
 }
 
-pub struct OllamaAssigner {
-    agent: Agent<ollama::CompletionModel>,
+pub struct LlamaAssigner {
+    agent: Agent,
     model: String,
 }
 
-impl OllamaAssigner {
-    pub fn new(config: Config) -> Result<Self, ask::Error> {
-        let client = ask::client(&config.url)?;
-        let agent = ask::agent(
-            &client,
-            &config.model,
-            config.keep_alive.as_deref(),
-            ask::no_thinking(),
-        )
-        .preamble(PROMPT)
-        .max_tokens(MAX_OUTPUT_TOKENS)
-        .output_schema::<Assignments>()
-        .output_mode(OutputMode::Native)
-        .build();
+impl LlamaAssigner {
+    pub fn new(config: Config) -> Self {
+        let client = ask::client(&config.url);
+        let agent = ask::agent(&client, &config.model)
+            .additional_params(ask::shaped::<Assignments>())
+            .preamble(PROMPT)
+            .max_tokens(MAX_OUTPUT_TOKENS)
+            .build();
 
-        Ok(Self {
+        Self {
             agent,
             model: config.model,
-        })
+        }
     }
 }
 
 #[async_trait::async_trait]
-impl ItemAssigner for OllamaAssigner {
+impl ItemAssigner for LlamaAssigner {
     async fn assign(
         &self,
         merchant: &str,
@@ -159,7 +150,7 @@ impl ItemAssigner for OllamaAssigner {
     ) -> anyhow::Result<Vec<Assigned>> {
         let started = Instant::now();
         let message = Message::user(question(merchant, people, items));
-        let raw = ask::once(&self.agent, message, REQUEST_TIMEOUT, None).await?;
+        let raw = ask::once(&self.agent, message, REQUEST_TIMEOUT).await?;
 
         let said: Assignments = serde_json::from_str(&raw)
             .context("model returned data that did not match the schema")?;

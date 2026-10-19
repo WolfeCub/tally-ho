@@ -1,19 +1,16 @@
 //! Standalone extraction probe. Run this against real receipt photos before
-//! wiring any UI: it is the fastest way to find out whether a given Ollama
-//! model is good enough, and to iterate on the prompt.
+//! wiring any UI: it is the fastest way to find out whether a given model is
+//! good enough, and to iterate on the prompt.
 //!
-//!   OLLAMA_URL=http://host.orb.internal:11434 \
-//!   OLLAMA_MODEL=gemma4:12b \
+//!   LLAMA_URL=http://host.orb.internal:8080 \
+//!   LLAMA_MODEL=gemma4:12b \
 //!   cargo run --no-default-features --features ssr --bin extract_probe -- path/to/receipt.webp
-//!
-//! Add `RUST_LOG=rig=debug` to see the request rig actually sends (confirm it
-//! carries a `format` object and an `images` array).
 
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use tally_ho::server::ask;
-    use tally_ho::server::extract::{Config, ExtractedReceipt, OllamaExtractor, ReceiptExtractor};
+    use tally_ho::server::extract::{Config, ExtractedReceipt, LlamaExtractor, ReceiptExtractor};
     use tally_ho::shared::dto::LineItem;
     use tally_ho::shared::problems::{line_item_sum, problems_of};
 
@@ -26,12 +23,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let paths: Vec<String> = std::env::args().skip(1).collect();
     if paths.is_empty() {
         eprintln!("usage: extract_probe <image|pdf> [image|pdf...]");
-        eprintln!("       extract_probe --schema   # dump the JSON schema sent to Ollama");
+        eprintln!("       extract_probe --schema   # dump the JSON schema sent to the model");
         std::process::exit(2);
     }
 
     // Dumping the schema is the first thing to check when output is garbage:
-    // Ollama turns it into a GBNF grammar, and a schema it can't convert
+    // llama-server turns it into a GBNF grammar, and a schema it can't convert
     // cleanly yields structurally-valid-but-nonsense JSON.
     if paths[0] == "--schema" {
         let schema = ask::schema_of::<ExtractedReceipt>();
@@ -39,17 +36,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let config = Config::load().await;
+    let config = Config::from_env();
     println!(
-        "model={} url={} max_edge={} ocr_context={} keep_alive={}\n",
+        "model={} url={} max_edge={}\n",
         config.label(),
         config.url,
-        config.max_image_edge,
-        config.ocr_context,
-        config.keep_alive.as_deref().unwrap_or("<server default>")
+        config.max_image_edge
     );
 
-    let extractor = OllamaExtractor::new(config)?;
+    let extractor = LlamaExtractor::new(config);
     let mut failures = 0;
 
     for path in &paths {
@@ -65,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        let n = extraction.receipt.normalize();
+        let n = extraction.receipt.normalize(jiff::Zoned::now().date());
 
         // First, so a wrong item can be read straight off against the fields
         // below it, wrong here is the photo misread, wrong only below is the

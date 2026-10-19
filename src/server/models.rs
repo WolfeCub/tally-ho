@@ -44,7 +44,7 @@ pub struct Receipt {
     pub status: ExtractionStatus,
     /// Populated only when `status` is `Failed`.
     pub extraction_error: Option<String>,
-    /// Which Ollama model produced this, so a bad batch is traceable.
+    /// Which model produced this, so a bad batch is traceable.
     pub model_used: Option<String>,
     /// Raw model output, kept for debugging bad extractions. Never queried, so
     /// opaque text storage is fine: `Json<T>` requires an explicit column type.

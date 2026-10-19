@@ -9,7 +9,7 @@ upload your card statement and reconcile it charge by charge. Each person in Set
 has a description of what they tend to buy, and that's what decides who pays what.
 A final CSV can be exported with the approved reconciliations.
 
-Leptos and axum, SQLite through toasty, extraction via Ollama.
+Leptos and axum, SQLite through toasty, extraction via llama.cpp.
 
 ## Development
 
@@ -18,17 +18,15 @@ nix develop          # or let direnv do it
 cargo leptos watch
 ```
 
-Needs an Ollama instance with both models pulled: one to read a receipt photo,
-one to turn the text into line items.
+Needs a llama-server serving both models by name (router mode): one to read a
+receipt photo, one to turn the text into line items.
 
 | Variable | Default |
 |---|---|
-| `OLLAMA_URL` | `http://localhost:11434` |
-| `OLLAMA_MODEL` | `gemma4:12b` |
-| `OLLAMA_OCR_MODEL` | `glm-ocr:q8_0` — empty to let `OLLAMA_MODEL` read the photo itself |
-| `OLLAMA_OCR_CONTEXT` | `8192` — `num_ctx` for the OCR model; too small silently truncates the transcript |
-| `OLLAMA_ASSIGN_MODEL` | same as `OLLAMA_MODEL` — the one that guesses whose each item is |
-| `OLLAMA_KEEP_ALIVE` | `-1m` — how long Ollama holds the models in VRAM; negative never unloads, empty leaves the server's default |
+| `LLAMA_URL` | `http://localhost:8080` |
+| `LLAMA_MODEL` | `gemma4:12b` |
+| `LLAMA_OCR_MODEL` | `glm-ocr:q8_0` — empty to let `LLAMA_MODEL` read the photo itself |
+| `LLAMA_ASSIGN_MODEL` | same as `LLAMA_MODEL` — the one that guesses whose each item is |
 | `MAX_IMAGE_EDGE` | `1600` — longest edge a photo is downscaled to before it's read |
 | `CURRENCY` | `CAD` — the ISO code your statements are in and the default receipt currency |
 | `DATABASE_URL` | `sqlite:./data/tally-ho.db` |
@@ -40,7 +38,7 @@ one to turn the text into line items.
 nix build .#image
 nix run .#image.copyToDockerDaemon
 docker run -p 3000:3000 -v tally-ho:/data \
-  -e OLLAMA_URL=http://your-host:11434 tally-ho:latest
+  -e LLAMA_URL=http://your-host:8080 tally-ho:latest
 ```
 
 ## Schema changes

@@ -180,10 +180,10 @@
           # So `cargo leptos watch` needs no env prefix.
           DATABASE_URL = "sqlite:./data/tally-ho.db";
           DATA_DIR = "./data";
-          # Ollama runs on the OrbStack host, not in here.
-          OLLAMA_URL = "http://host.orb.internal:11434";
-          OLLAMA_MODEL = "gemma4:12b";
-          OLLAMA_OCR_MODEL = "glm-ocr:q8_0";
+          # llama-server runs on the OrbStack host, not in here.
+          LLAMA_URL = "http://host.orb.internal:8080";
+          LLAMA_MODEL = "gemma4:12b";
+          LLAMA_OCR_MODEL = "glm-ocr:q8_0";
           RUST_LOG = "info,tally_ho=debug";
         };
       }

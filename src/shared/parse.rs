@@ -58,7 +58,7 @@ pub fn money(raw: &str) -> Option<Decimal> {
 /// A first field over 12 is not ambiguous at all, though, so `14/08/26` is
 /// read day-first.
 pub fn date(raw: &str) -> Option<jiff::civil::Date> {
-    let s = raw.trim();
+    let s = without_time(raw.trim());
 
     if let Ok(d) = s.parse::<jiff::civil::Date>() {
         return Some(d);
@@ -68,6 +68,24 @@ pub fn date(raw: &str) -> Option<jiff::civil::Date> {
         return Some(d);
     }
 
+    numeric(s, false)
+}
+
+/// [`date`], except that an ambiguous date read month-first as later than
+/// `latest` is read day-first instead. A receipt extracted in September and
+/// printed `12/08/26` is from 12 August, not 8 December.
+pub fn date_not_after(raw: &str, latest: jiff::civil::Date) -> Option<jiff::civil::Date> {
+    let read = date(raw)?;
+    if read <= latest {
+        return Some(read);
+    }
+    numeric(without_time(raw.trim()), true)
+        .filter(|d| *d <= latest)
+        .or(Some(read))
+}
+
+/// All-digit dates. `day_first` only decides the ambiguous ones.
+fn numeric(s: &str, day_first: bool) -> Option<jiff::civil::Date> {
     let parts: Vec<&str> = s
         .split(['/', '-', '.'])
         .map(str::trim)
@@ -89,13 +107,29 @@ pub fn date(raw: &str) -> Option<jiff::civil::Date> {
     // not historical documents.
     let year = if parts[2].len() <= 2 { 2000 + c } else { c };
     // A first field over 12 can only be a day, so read those DD/MM/YY.
-    let (month, day) = if a > 12 { (b, a as i8) } else { (a as i8, b) };
+    let (month, day) = if a > 12 || day_first {
+        (b, a as i8)
+    } else {
+        (a as i8, b)
+    };
     jiff::civil::Date::new(year as i16, month, day).ok()
 }
 
-/// A month spelled out: "28 Jul 2026", "July 28, 2026", "28-JUL-26". Amex writes
-/// its statements this way, and there's nothing to disambiguate once the month
-/// names itself.
+/// The date with any time printed after it dropped: "09-19-2026 12:13:30 PM",
+/// "2026-09-01-18:57".
+fn without_time(s: &str) -> &str {
+    let Some(colon) = s.find(':') else {
+        return s;
+    };
+    let start = s[..colon]
+        .rfind(|c: char| c.is_whitespace() || c == '-')
+        .unwrap_or(0);
+    s[..start].trim_end()
+}
+
+/// A month spelled out: "28 Jul 2026", "July 28, 2026", "28-JUL-26",
+/// "2026-Sep-15". Amex writes its statements this way, and there's nothing to
+/// disambiguate once the month names itself.
 fn spelled_month(s: &str) -> Option<jiff::civil::Date> {
     // The day of the week, if it's there, says nothing the rest of the date
     // doesn't. Dropping it beats doubling the format list below.
@@ -105,7 +139,7 @@ fn spelled_month(s: &str) -> Option<jiff::civil::Date> {
             .any(|format| jiff::fmt::strtime::parse(format, field).is_ok())
     };
 
-    // Down to single spaces first, so four formats cover whatever punctuation
+    // Down to single spaces first, so six formats cover whatever punctuation
     // the file separates the fields with.
     let tidied = s
         .split(|c: char| c.is_whitespace() || matches!(c, ',' | '-' | '/' | '.'))
@@ -115,9 +149,11 @@ fn spelled_month(s: &str) -> Option<jiff::civil::Date> {
 
     // Month names match whatever case they're written in. `%b` is the
     // abbreviation and `%B` the full name; neither accepts the other.
-    let date = ["%d %b %Y", "%d %B %Y", "%b %d %Y", "%B %d %Y"]
-        .iter()
-        .find_map(|format| jiff::civil::Date::strptime(format, &tidied).ok())?;
+    let date = [
+        "%d %b %Y", "%d %B %Y", "%b %d %Y", "%B %d %Y", "%Y %b %d", "%Y %B %d",
+    ]
+    .iter()
+    .find_map(|format| jiff::civil::Date::strptime(format, &tidied).ok())?;
 
     // `%Y` takes a two-digit year at face value, so "28 Jul 26" comes back as
     // year 26. Same rule as above: current century.
@@ -191,6 +227,7 @@ mod tests {
         // A receipt that prints the day of the week too.
         assert_eq!(date("TUE JULY 28,2026"), Some(expected));
         assert_eq!(date("Tuesday, July 28, 2026"), Some(expected));
+        assert_eq!(date("2026-Jul-28"), Some(expected));
         // Still a word where the month should be.
         assert_eq!(date("28 Jly 2026"), None);
     }
@@ -213,6 +250,48 @@ mod tests {
         assert_eq!(date("15/08/26"), Some(jiff::civil::date(2026, 8, 15)));
         assert_eq!(date("13/02/26"), Some(jiff::civil::date(2026, 2, 13)));
         assert_eq!(date("31/12/2026"), Some(jiff::civil::date(2026, 12, 31)));
+    }
+
+    /// Home Depot printed `12/08/26` for 12 August, and the month-first reading
+    /// was approved as 8 December, three months after the upload.
+    #[test]
+    fn an_ambiguous_date_after_the_latest_is_read_day_first() {
+        let latest = jiff::civil::date(2026, 9, 2);
+        assert_eq!(
+            date_not_after("12/08/26", latest),
+            Some(jiff::civil::date(2026, 8, 12))
+        );
+        assert_eq!(
+            date_not_after("08/10/2026", latest),
+            Some(jiff::civil::date(2026, 8, 10))
+        );
+        // Neither reading fits, so the usual one stands.
+        assert_eq!(
+            date_not_after("12/11/26", latest),
+            Some(jiff::civil::date(2026, 12, 11))
+        );
+        // Not ambiguous, so not reinterpreted.
+        assert_eq!(
+            date_not_after("2026-12-08", latest),
+            Some(jiff::civil::date(2026, 12, 8))
+        );
+    }
+
+    /// Receipts that print the time on the same line as the date.
+    #[test]
+    fn parses_dates_with_a_time_after_them() {
+        assert_eq!(
+            date("09-19-2026 12:13:30 PM"),
+            Some(jiff::civil::date(2026, 9, 19))
+        );
+        assert_eq!(
+            date("2026-09-01-18:57"),
+            Some(jiff::civil::date(2026, 9, 1))
+        );
+        assert_eq!(
+            date("12/08/26 05:21 p.m."),
+            Some(jiff::civil::date(2026, 12, 8))
+        );
     }
 
     #[test]

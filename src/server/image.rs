@@ -1,7 +1,7 @@
 //! Receipt photo pre-processing.
 //!
 //! Not an optimization: a required step. A full-resolution phone photo would
-//! blow out both the model's context and VRAM, and Ollama's image decoder is
+//! blow out both the model's context and VRAM, and llama.cpp's image decoder is
 //! narrow (it will not take webp), so everything is normalized to a modest JPEG
 //! before it reaches the model. The original file is kept on disk untouched.
 
@@ -18,7 +18,7 @@ pub enum ImageError {
 }
 
 pub struct Prepared {
-    /// Baseline JPEG, ready to base64-encode for Ollama.
+    /// Baseline JPEG, ready to base64-encode for the model.
     pub jpeg: Vec<u8>,
     pub width: u32,
     pub height: u32,

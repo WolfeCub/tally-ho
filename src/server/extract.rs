@@ -1,9 +1,9 @@
-//! Receipt line-item extraction against local models via Ollama.
+//! Receipt line-item extraction against local models via llama-server.
 //!
 //! Two stages, because reading a creased receipt and structuring it are different
-//! skills: a small OCR model transcribes the photo, then `OLLAMA_MODEL` turns
+//! skills: a small OCR model transcribes the photo, then `LLAMA_MODEL` turns
 //! that text into [`ExtractedReceipt`] without ever seeing the image. Setting
-//! `OLLAMA_OCR_MODEL` empty collapses it back to one model reading the photo.
+//! `LLAMA_OCR_MODEL` empty collapses it back to one model reading the photo.
 //!
 //! A PDF invoice skips the first stage: it carries its own text, so only the
 //! structuring model runs, against a prompt written for an invoice rather than a
@@ -14,22 +14,19 @@
 //! `Extractor::extract()` only yields data when the model emits a tool call
 //! matching its synthetic `submit` tool: `output_tool_calls() > 0` is the sole
 //! path that returns a value, so in any other output mode it reports `NoData`
-//! even when the model returned valid JSON. It also hardcodes
-//! `ToolChoice::Required`, which rig's Ollama provider explicitly warns about
-//! and drops, so the call can't be compelled.
+//! even when the model returned valid JSON, and a small local model can't be
+//! relied on to choose to call a tool.
 //!
-//! Instead we drive an `Agent` in [`OutputMode::Native`], which rig maps to
-//! Ollama's `format` field. That is a grammar constraint: the response is
-//! *guaranteed* to match the schema, and no tool-calling support is required of
-//! the model.
+//! Instead we drive a plain `Agent` with the schema as the request's
+//! `response_format`, which llama-server compiles into a grammar: the response
+//! is *guaranteed* to match the schema, and no tool-calling support is required
+//! of the model. See [`ask::shaped`] for why that isn't rig's `output_schema`.
 
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use rig_agent::agent::{Agent, OutputMode};
-use rig_core::OneOrMany;
+use rig_agent::Agent;
 use rig_core::message::{ImageMediaType, Message, UserContent};
-use rig_core::providers::ollama;
 use rust_decimal::Decimal;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -39,7 +36,12 @@ use super::image::{self, ImageError};
 use super::pdf::{self, PdfError};
 use crate::shared::parse;
 
-const DEFAULT_URL: &str = "http://localhost:11434";
+/// llama-server's own default port. The root, not `/v1`: see [`ask::client`].
+const DEFAULT_URL: &str = "http://localhost:8080";
+
+/// What the server routes on, so these have to match its model names. The
+/// context, GPU layers and residency each model runs with are the server's to
+/// set.
 const DEFAULT_MODEL: &str = "gemma4:12b";
 
 /// Reads the photo, which [`DEFAULT_MODEL`] then structures. A 1.1B model that
@@ -47,75 +49,35 @@ const DEFAULT_MODEL: &str = "gemma4:12b";
 /// every amount and barcode right in ~2s, against `2.44` coming back as `14.00`.
 const DEFAULT_OCR_MODEL: &str = "glm-ocr:q8_0";
 
-/// Ollama's `num_ctx` for the OCR model, which is the one setting here that can't
-/// be left to the server default. The photo is most of the prompt and the
-/// transcript has to fit in what's left: at 2048 the test receipt stops after
-/// three of its five items and loses every total, which downstream reads as a
-/// receipt that simply hadn't got any. 4096 transcribes that one whole, so this
-/// is double it: a long grocery receipt is a much longer transcript.
-const DEFAULT_OCR_CONTEXT: u32 = 8192;
-
-/// Ollama's `num_gpu` for the OCR model, every layer, overriding Ollama's own
-/// placement estimate. It sizes a vision model's compute graph against the
-/// largest image it might be sent, and at [`DEFAULT_MAX_EDGE`] that projection
-/// exceeds what the 12B model leaves free, so it splits the OCR model across
-/// CPU and GPU instead. Measured on a 12 GB 3060 with both models resident: the
-/// split put 1146 MiB of a ~2.0 GB model on the GPU while 2740 MiB sat unused,
-/// so what was short was the projection, not the card. That arithmetic runs on
-/// every load, not once, so it was re-decided each time the model came back from
-/// an idle unload: see [`DEFAULT_KEEP_ALIVE`], which now stops it unloading at
-/// all.
-///
-/// Forced, the same model loads fully resident at 1.3 GB, *less* than the
-/// 1.9 GB the split took, because splitting layers across backends allocates
-/// compute buffers on both of them. The configuration Ollama was avoiding is
-/// cheaper than the one it chose.
-///
-/// 99 is the conventional "all of them": Ollama clamps it to the layer count.
-/// The tradeoff is that this removes the safety net: if the GPU genuinely
-/// hasn't room, the runner now fails to load rather than quietly falling back
-/// to a slow CPU split.
-const OCR_GPU_LAYERS: u32 = 99;
-
-/// How long Ollama holds these models in VRAM after a request, its `keep_alive`.
-/// Negative means never unload, and that is the default here: Ollama's own
-/// default drops a model after five minutes idle, so the first receipt after any
-/// quiet spell pays a cold load, which for the OCR model is also when its
-/// placement is re-decided (see [`OCR_GPU_LAYERS`]).
-///
-/// Spelled with a unit because the string form is parsed as a duration, so a
-/// bare `-1` has nothing to parse; rig requires a string here and rejects a
-/// number outright. Set `OLLAMA_KEEP_ALIVE` empty to leave the server's default
-/// alone, which is what you want if something else shares the GPU and needs the
-/// models to get out of the way.
-const DEFAULT_KEEP_ALIVE: &str = "-1m";
-
 /// Downscale only, and about cost rather than accuracy: the OCR model reads this
 /// receipt anywhere from 1024 to 5096 pixels. Past this it's just tiled into more
 /// pieces: 2.1s here against 10s at native, for the same text. Below it the
 /// transcript gets noisier, fenced and repeating, which lost a subtotal at 1024.
 const DEFAULT_MAX_EDGE: u32 = 1600;
 
-/// Ollama's `num_predict`, for the transcript as much as the JSON. Measured at
-/// ~40 output tokens per line item plus ~130 of fixed JSON overhead, so this
-/// covers a long grocery receipt with room to spare. It exists mainly as a
-/// backstop: without a cap, a model that fails to terminate blocks the request
-/// indefinitely instead of failing.
+/// The `max_tokens` of every request, for the transcript as much as the JSON.
+/// Measured at ~40 output tokens per line item plus ~130 of fixed JSON
+/// overhead, so this covers a long grocery receipt with room to spare. It
+/// exists mainly as a backstop: without a cap, a model that fails to terminate
+/// blocks the request indefinitely instead of failing. Hitting it fails the
+/// read rather than keeping what was written: see [`ask::Error::Truncated`].
 const MAX_OUTPUT_TOKENS: u64 = 2048;
 
 /// Wall-clock ceiling for one request, so a two-stage extraction can take twice
 /// it. Decode measured at ~32 tok/s, so a full `MAX_OUTPUT_TOKENS` response is
 /// ~65s; the rest is headroom for the request queueing behind other work on the
-/// same Ollama instance.
+/// same server.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// What the model is asked to produce.
 ///
-/// Every money and date field is a **string**, deliberately. A local model will
-/// write "$4.99", "4,99" or "1 234.56", and a typed `number`/`Decimal` schema
-/// would either reject the whole payload or silently coerce through a float.
-/// Strings keep the grammar simple and move parsing somewhere we can report on
-/// it field by field: see [`ExtractedReceipt::normalize`].
+/// Every money and date field comes back a **string**, deliberately. A local
+/// model will write "$4.99", "4,99" or "1 234.56", and a typed `number`/`Decimal`
+/// schema would either reject the whole payload or silently coerce through a
+/// float. Strings move parsing somewhere we can report on it field by field: see
+/// [`ExtractedReceipt::normalize`].
+///
+/// The model may still *write* an amount as a bare number: see [`Amount`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ExtractedReceipt {
     /// Store or merchant name exactly as printed.
@@ -132,10 +94,10 @@ pub struct ExtractedReceipt {
     pub purchased_on: Option<String>,
     /// ISO currency code, e.g. USD.
     pub currency: Option<String>,
-    pub subtotal: Option<String>,
-    pub tax: Option<String>,
+    pub subtotal: Option<Amount>,
+    pub tax: Option<Amount>,
     /// The final amount charged.
-    pub total: Option<String>,
+    pub total: Option<Amount>,
     pub line_items: Vec<ExtractedLineItem>,
 }
 
@@ -143,19 +105,72 @@ pub struct ExtractedReceipt {
 pub struct ExtractedLineItem {
     /// Item name as printed on the receipt.
     pub description: String,
-    pub quantity: Option<String>,
-    pub unit_price: Option<String>,
+    pub quantity: Option<Amount>,
+    pub unit_price: Option<Amount>,
     /// Line total. Negative for discounts and coupons.
     ///
     /// Not an `Option`, which is what puts it in the nested object's `required`
     /// list; [`ask::schema_of`] only does that for the top level. Left optional,
     /// the grammar lets the model omit the key, and on an invoice it omitted
     /// this one on every line. An amount it can't read comes back empty.
-    pub total: String,
+    pub total: Amount,
+}
+
+/// An amount as the model wrote it, a string or a bare number.
+///
+/// gemma4:12b writes amounts as JSON numbers whatever the prompt says. Under a
+/// string-only grammar that leaves it a second choice, and on llama-server that
+/// choice was `null`: a fifth of receipts came back with no total, against 6%
+/// on Ollama, which took the quote instead and sometimes wrote junk inside it
+/// (`"}}17.37"`). Allowing the number takes away the fight.
+///
+/// Either way it's kept as text. A number comes back through `f64`, whose
+/// shortest round trip is exact for anything with fewer than 16 significant
+/// digits, which every amount on a receipt has.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Amount(pub String);
+
+impl<'de> Deserialize<'de> for Amount {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Written {
+            Text(String),
+            Number(serde_json::Number),
+        }
+
+        Ok(Self(match Written::deserialize(d)? {
+            Written::Text(text) => text,
+            Written::Number(number) => number.to_string(),
+        }))
+    }
+}
+
+impl std::ops::Deref for Amount {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl JsonSchema for Amount {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Amount".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "type": ["string", "number"] })
+    }
 }
 
 /// The field semantics have to live here, not in the struct's doc comments:
-/// Ollama compiles the JSON schema into a GBNF grammar and drops `description`
+/// the server compiles the JSON schema into a GBNF grammar and drops `description`
 /// fields on the way, so anything explained only in the schema is invisible to
 /// the model. Measured behaviour without these instructions was amounts landing
 /// in `unit_price` instead of `total`, and `purchased_on` being skipped.
@@ -232,6 +247,9 @@ null.
 - tax: the total tax printed, however it's named — VAT, GST, HST, sales tax. Add \
 nothing up: where several are printed separately and no combined figure is, null.
 - total: the final amount charged, after tax and shipping.
+- subtotal, tax and total again: one document can hold several invoices, each \
+with its own invoice number and its own total. Then none of them covers the whole \
+order, so these three are null. Do not add the invoices' figures together.
 - line_items: one entry per thing bought, in the order listed.
 
 For each line item:
@@ -299,53 +317,24 @@ pub trait ReceiptExtractor: Send + Sync {
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// llama-server's root, routing to either model by name.
     pub url: String,
     pub model: String,
-    /// What Ollama runs [`Self::model`] at, and `None` when it wouldn't say.
-    /// Asked for rather than configured: Ollama already knows, and a number
-    /// typed into the environment could disagree with it.
-    pub context: Option<u32>,
     /// Transcribes the photo before [`Self::model`] structures it. Set
-    /// `OLLAMA_OCR_MODEL` empty to skip that and hand the photo to [`Self::model`]
-    /// instead, which then has to be able to see: worse, but one model to pull.
+    /// `LLAMA_OCR_MODEL` empty to skip that and hand the photo to [`Self::model`]
+    /// instead, which then has to be able to see: worse, but one model to serve.
     pub ocr_model: Option<String>,
-    /// Context window for [`Self::ocr_model`], big enough for the photo and the
-    /// transcript it comes back as.
-    pub ocr_context: u32,
-    /// Ollama's `keep_alive` for both models. `None` leaves the server's default
-    /// in place; otherwise it's a duration string, negative to never unload.
-    pub keep_alive: Option<String>,
     pub max_image_edge: u32,
 }
 
 impl Config {
-    /// The environment, plus the one setting only Ollama can answer for. Async
-    /// because finding that out means loading the model, which the keep-alive
-    /// policy wants done at startup anyway.
-    pub async fn load() -> Self {
-        let mut config = Self::from_env();
-        let model = &config.model;
-
-        config.context =
-            ask::context_length(&config.url, model, config.keep_alive.as_deref()).await;
-        match config.context {
-            Some(context) => tracing::info!(%model, context, "ollama context length"),
-            None => tracing::warn!(%model, "ollama would not say its context length"),
-        }
-
-        config
-    }
-
-    fn from_env() -> Self {
+    pub fn from_env() -> Self {
         use crate::server::env;
 
         Self {
-            url: env::string("OLLAMA_URL", DEFAULT_URL),
-            model: env::string("OLLAMA_MODEL", DEFAULT_MODEL),
-            context: None,
-            ocr_model: env::optional("OLLAMA_OCR_MODEL", DEFAULT_OCR_MODEL),
-            ocr_context: env::number("OLLAMA_OCR_CONTEXT", DEFAULT_OCR_CONTEXT),
-            keep_alive: env::optional("OLLAMA_KEEP_ALIVE", DEFAULT_KEEP_ALIVE),
+            url: env::string("LLAMA_URL", DEFAULT_URL),
+            model: env::string("LLAMA_MODEL", DEFAULT_MODEL),
+            ocr_model: env::optional("LLAMA_OCR_MODEL", DEFAULT_OCR_MODEL),
             max_image_edge: env::number("MAX_IMAGE_EDGE", DEFAULT_MAX_EDGE),
         }
     }
@@ -360,59 +349,45 @@ impl Config {
     }
 }
 
-pub struct OllamaExtractor {
+pub struct LlamaExtractor {
     /// Structures a till receipt read off a photo.
-    ///
-    /// `Agent` is generic over the completion model in rig 0.41; the Ollama model
-    /// type defaults its HTTP backend to `reqwest::Client`.
-    receipt: Agent<ollama::CompletionModel>,
+    receipt: Agent,
     /// Structures a vendor's invoice read out of a PDF. Same model and schema as
     /// [`Self::receipt`], differing only in the preamble, which has to be a
     /// second agent, because rig fixes the preamble when one is built.
-    invoice: Agent<ollama::CompletionModel>,
+    invoice: Agent,
     /// Transcribes a photo for [`Self::receipt`]. Absent when there's no OCR
     /// model, in which case `receipt` reads the photo itself.
-    ocr: Option<Agent<ollama::CompletionModel>>,
+    ocr: Option<Agent>,
     config: Config,
 }
 
-impl OllamaExtractor {
-    pub fn new(config: Config) -> Result<Self, ExtractError> {
-        let client = ask::client(&config.url)?;
-        let keep_alive = config.keep_alive.as_deref();
+impl LlamaExtractor {
+    pub fn new(config: Config) -> Self {
+        let client = ask::client(&config.url);
 
         let structuring = |preamble: &str| {
-            ask::agent(&client, &config.model, keep_alive, ask::no_thinking())
+            ask::agent(&client, &config.model)
+                .additional_params(ask::shaped::<ExtractedReceipt>())
                 .preamble(preamble)
-                // Maps to Ollama's `num_predict`.
                 .max_tokens(MAX_OUTPUT_TOKENS)
-                .output_schema_raw(ask::schema_of::<ExtractedReceipt>())
-                // Native, not Tool: this becomes Ollama's `format`, a hard
-                // grammar constraint. Tool mode would depend on the model
-                // choosing to call a tool, which cannot be forced here.
-                .output_mode(OutputMode::Native)
                 .build()
         };
 
-        // No preamble and no schema: it does one thing, and its Ollama template is
+        // No preamble and no schema: it does one thing, and its chat template is
         // a bare prompt, so a system message has nowhere to go.
         let ocr = config.ocr_model.as_deref().map(|model| {
-            // rig lifts `num_ctx` into Ollama's `options`.
-            let options = serde_json::json!({
-                "num_ctx": config.ocr_context,
-                "num_gpu": OCR_GPU_LAYERS,
-            });
-            ask::agent(&client, model, keep_alive, options)
+            ask::agent(&client, model)
                 .max_tokens(MAX_OUTPUT_TOKENS)
                 .build()
         });
 
-        Ok(Self {
+        Self {
             receipt: structuring(PROMPT),
             invoice: structuring(INVOICE_PROMPT),
             ocr,
             config,
-        })
+        }
     }
 
     /// A photo as something [`Self::receipt`] can structure: the OCR model's
@@ -421,34 +396,26 @@ impl OllamaExtractor {
         let prepared = image::prepare(bytes, self.config.max_image_edge)?;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&prepared.jpeg);
 
-        // Ollama accepts base64 only: rig's provider hard-errors on the `Raw`
-        // and `Url` image source kinds.
+        // Sent inline as a data URI, which needs the media type said.
         let photo = |instruction: &str| Message::User {
-            content: OneOrMany::many([
+            content: vec![
                 UserContent::image_base64(b64.clone(), Some(ImageMediaType::JPEG), None),
                 UserContent::text(instruction),
-            ])
-            .expect("two content parts is never empty"),
+            ],
         };
 
         let Some(ocr) = &self.ocr else {
             return Ok((photo("Extract every line item from this receipt."), None));
         };
 
-        let transcript = ask::once(
-            ocr,
-            photo(OCR_PROMPT),
-            REQUEST_TIMEOUT,
-            Some(self.config.ocr_context),
-        )
-        .await?;
+        let transcript = ask::once(ocr, photo(OCR_PROMPT), REQUEST_TIMEOUT).await?;
         let message = Message::user(format!("The receipt, transcribed:\n\n{transcript}"));
         Ok((message, Some(transcript)))
     }
 }
 
 #[async_trait::async_trait]
-impl ReceiptExtractor for OllamaExtractor {
+impl ReceiptExtractor for LlamaExtractor {
     async fn extract(&self, bytes: &[u8]) -> Result<Extraction, ExtractError> {
         let started = Instant::now();
 
@@ -457,20 +424,9 @@ impl ReceiptExtractor for OllamaExtractor {
         // would credit a model that never saw this one.
         let (agent, message, source_text, model) = if pdf::is_pdf(bytes) {
             let text = pdf::text(bytes)?;
-            let printed = format!("The invoice, as printed:\n\n{text}");
-            // A photo needs no such check: its transcript is capped by
-            // `MAX_OUTPUT_TOKENS`, so it can't outgrow what reads it.
-            ask::fits(
-                &self.config.url,
-                &self.config.model,
-                self.config.keep_alive.as_deref(),
-                INVOICE_PROMPT,
-                &printed,
-            )
-            .await?;
             (
                 &self.invoice,
-                Message::user(printed),
+                Message::user(format!("The invoice, as printed:\n\n{text}")),
                 Some(text),
                 self.config.model.clone(),
             )
@@ -479,8 +435,7 @@ impl ReceiptExtractor for OllamaExtractor {
             (&self.receipt, message, transcript, self.config.label())
         };
 
-        let structuring_raw =
-            ask::once(agent, message, REQUEST_TIMEOUT, self.config.context).await?;
+        let structuring_raw = ask::once(agent, message, REQUEST_TIMEOUT).await?;
 
         Ok(Extraction {
             receipt: serde_json::from_str(&structuring_raw)?,
@@ -538,7 +493,8 @@ fn parse_or_note<T>(
 }
 
 impl ExtractedReceipt {
-    pub fn normalize(&self) -> Normalized {
+    /// `today` settles an ambiguous date: see [`parse::date_not_after`].
+    pub fn normalize(&self, today: jiff::civil::Date) -> Normalized {
         let mut notes = Vec::new();
 
         let subtotal = parse_or_note(
@@ -552,7 +508,7 @@ impl ExtractedReceipt {
         let purchased_on = parse_or_note(
             self.purchased_on.as_deref(),
             "date",
-            parse::date,
+            |raw| parse::date_not_after(raw, today),
             &mut notes,
         );
 
@@ -567,7 +523,7 @@ impl ExtractedReceipt {
                     description: item.description.trim().to_string(),
                     quantity: money(item.quantity.as_deref(), &format!("item {i} quantity")),
                     unit_price: money(item.unit_price.as_deref(), &format!("item {i} unit price")),
-                    total: money(Some(&item.total), &format!("item {i} total")),
+                    total: money(Some(&*item.total), &format!("item {i} total")),
                 }
             })
             .collect();
@@ -598,17 +554,17 @@ mod tests {
             purchased_on: Some("nonsense".to_string()),
             currency: Some("usd".to_string()),
             subtotal: None,
-            tax: Some("about three dollars".to_string()),
-            total: Some("$12.34".to_string()),
+            tax: Some(Amount("about three dollars".into())),
+            total: Some(Amount("$12.34".into())),
             line_items: vec![ExtractedLineItem {
                 description: " MILK 2% ".to_string(),
                 quantity: None,
                 unit_price: None,
-                total: "4.99".to_string(),
+                total: Amount("4.99".into()),
             }],
         };
 
-        let n = raw.normalize();
+        let n = raw.normalize(jiff::civil::date(2026, 7, 20));
         assert_eq!(n.merchant.as_deref(), Some("Walmart"));
         assert_eq!(n.currency.as_deref(), Some("USD"));
         assert_eq!(n.total, Some(dec("12.34")));
@@ -617,6 +573,24 @@ mod tests {
         assert_eq!(n.line_items[0].description, "MILK 2%");
         assert_eq!(n.line_items[0].total, Some(dec("4.99")));
         assert_eq!(n.warnings.len(), 2, "bad date and bad tax should warn");
+    }
+
+    /// The model writes an amount as a number as readily as a string, and both
+    /// have to arrive as the same text.
+    #[test]
+    fn an_amount_reads_as_a_string_or_a_number() {
+        let raw: ExtractedReceipt = serde_json::from_str(
+            r#"{"merchant":null,"purchased_on":null,"currency":null,
+                "subtotal":3.95,"tax":"0.28","total":null,
+                "line_items":[{"description":"COFFEE","quantity":2,"unit_price":null,"total":-1.5}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(raw.subtotal.as_deref(), Some("3.95"));
+        assert_eq!(raw.tax.as_deref(), Some("0.28"));
+        assert_eq!(raw.total, None);
+        assert_eq!(raw.line_items[0].quantity.as_deref(), Some("2"));
+        assert_eq!(&*raw.line_items[0].total, "-1.5");
     }
 
     /// The grammar makes the model write a `total` for every item, so an amount
@@ -635,11 +609,11 @@ mod tests {
                 description: "SMUDGED".to_string(),
                 quantity: None,
                 unit_price: None,
-                total: "  ".to_string(),
+                total: Amount("  ".into()),
             }],
         };
 
-        let n = raw.normalize();
+        let n = raw.normalize(jiff::civil::date(2026, 7, 20));
         assert_eq!(n.line_items[0].total, None);
         assert!(n.warnings.is_empty(), "got {:?}", n.warnings);
     }
