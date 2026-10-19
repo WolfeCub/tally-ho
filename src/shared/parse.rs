@@ -58,12 +58,13 @@ pub fn money(raw: &str) -> Option<Decimal> {
 /// A first field over 12 is not ambiguous at all, though, so `14/08/26` is
 /// read day-first.
 pub fn date(raw: &str) -> Option<jiff::civil::Date> {
-    let s = without_time(raw.trim());
+    let s = raw.trim();
 
     if let Ok(d) = s.parse::<jiff::civil::Date>() {
         return Some(d);
     }
 
+    let s = without_time(s);
     if let Some(d) = spelled_month(s) {
         return Some(d);
     }
@@ -291,6 +292,10 @@ mod tests {
         assert_eq!(
             date("12/08/26 05:21 p.m."),
             Some(jiff::civil::date(2026, 12, 8))
+        );
+        assert_eq!(
+            date("2026-09-01T18:57:00-04:00"),
+            Some(jiff::civil::date(2026, 9, 1))
         );
     }
 

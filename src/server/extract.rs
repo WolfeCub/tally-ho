@@ -9,18 +9,9 @@
 //! structuring model runs, against a prompt written for an invoice rather than a
 //! till receipt.
 //!
-//! # Why not `rig`'s `Extractor`
-//!
-//! `Extractor::extract()` only yields data when the model emits a tool call
-//! matching its synthetic `submit` tool: `output_tool_calls() > 0` is the sole
-//! path that returns a value, so in any other output mode it reports `NoData`
-//! even when the model returned valid JSON, and a small local model can't be
-//! relied on to choose to call a tool.
-//!
-//! Instead we drive a plain `Agent` with the schema as the request's
-//! `response_format`, which llama-server compiles into a grammar: the response
-//! is *guaranteed* to match the schema, and no tool-calling support is required
-//! of the model. See [`ask::shaped`] for why that isn't rig's `output_schema`.
+//! The schema goes out as the request's `response_format`, which llama-server
+//! compiles into a grammar, so the answer always matches it and the model needs
+//! no tool calling. rig's `Extractor` returns data only from a tool call.
 
 use std::time::{Duration, Instant};
 
@@ -118,15 +109,9 @@ pub struct ExtractedLineItem {
 
 /// An amount as the model wrote it, a string or a bare number.
 ///
-/// gemma4:12b writes amounts as JSON numbers whatever the prompt says. Under a
-/// string-only grammar that leaves it a second choice, and on llama-server that
-/// choice was `null`: a fifth of receipts came back with no total, against 6%
-/// on Ollama, which took the quote instead and sometimes wrote junk inside it
-/// (`"}}17.37"`). Allowing the number takes away the fight.
-///
-/// Either way it's kept as text. A number comes back through `f64`, whose
-/// shortest round trip is exact for anything with fewer than 16 significant
-/// digits, which every amount on a receipt has.
+/// gemma4:12b writes amounts as numbers whatever the prompt says, and under a
+/// string-only grammar it wrote `null` instead. Kept as text either way: `f64`
+/// round-trips exactly below 16 significant digits.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct Amount(pub String);

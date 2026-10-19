@@ -32,14 +32,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_or("?", |p| p.name.as_str())
     };
 
-    let ids: Vec<uuid::Uuid> = match std::env::args().skip(1).collect::<Vec<_>>() {
-        args if args.is_empty() => queries::receipts::recent(&mut db, i64::MAX as usize)
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let ids: Vec<uuid::Uuid> = if args.is_empty() {
+        queries::receipts::recent(&mut db, i64::MAX as usize)
             .await?
             .into_iter()
             .filter(|r| r.reviewed)
             .map(|r| r.id)
-            .collect(),
-        args => args.iter().map(|a| a.parse()).collect::<Result<_, _>>()?,
+            .collect()
+    } else {
+        args.iter().map(|a| a.parse()).collect::<Result<_, _>>()?
     };
 
     let config = assign::Config::from_extraction(&extract::Config::from_env());

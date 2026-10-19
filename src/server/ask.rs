@@ -48,9 +48,8 @@ pub fn agent(client: &openai::OpenAI, model: &str) -> AgentBuilder {
         // empty, all null, or with junk inside a string field. The grammar
         // constrains the shape, not what goes in a string.
         .temperature(0.0)
-        // gemma4:12b thinks by default, and the reasoning ate the whole token
-        // budget: 47s of it, then empty content and what looked like a parse
-        // error. A template without the switch just ignores it.
+        // gemma4:12b thinks by default, which eats the token budget. A template
+        // without the switch ignores it.
         .provider_option(
             LlamaCppOptions::new().chat_template_kwarg("enable_thinking", false.into()),
         )
